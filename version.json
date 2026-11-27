@@ -1,0 +1,7 @@
+{
+  "versionCode": 2,
+  "versionName": "0.9.1-pre",
+  "stage": "pre-release",
+  "notes": "第五轮修复后。仍未在真机验证。已知风险见 KNOWN-ISSUES.md。",
+  "archivedBaseline": "dist/archive/20261127-pre-versioning/MociCi-prever.apk"
+}

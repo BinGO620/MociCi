@@ -1,0 +1,268 @@
+package com.moci.cet6;
+
+import android.content.Context;
+import android.os.Build;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * System TTS wrapper tuned for instant playback.
+ *
+ * Startup cost is the dominant latency source on many ROMs, so the engine is
+ * created in Activity.onCreate and language/rate are configured exactly once in
+ * onInit. Every speak() stops the previous utterance first (no overlapping audio
+ * when flipping cards fast), and prefetch() synthesises the next word to a cache
+ * file so the following tap can play from disk.
+ *
+ * Default accent is en-GB (CET-6 listening is British-leaning); en-US is kept as
+ * an alternative.
+ */
+final class TtsEngine {
+    private final Context ctx;
+    private final Prefs prefs;
+    private final File cacheDir;
+    private TextToSpeech tts;
+    private volatile boolean ready;
+    private volatile String engineName;
+    private volatile int langStatus = TextToSpeech.LANG_NOT_SUPPORTED;
+    private volatile String lastError;
+    private volatile String accent;
+    private volatile boolean configured;
+    private long uttSeq;
+
+    TtsEngine(Context ctx, Prefs prefs) {
+        this.ctx = ctx.getApplicationContext();
+        this.prefs = prefs;
+        this.engineName = prefs.get("ttsEngine", null);
+        this.accent = prefs.get("ttsAccent", "uk");
+        this.cacheDir = new File(ctx.getCacheDir(), "tts");
+        init();
+    }
+
+    private Locale locale() {
+        return "us".equals(accent) ? Locale.US : Locale.UK;
+    }
+
+    void setAccent(String value) {
+        String next = "us".equals(value) ? "us" : "uk";
+        if (next.equals(accent) && configured) return;
+        accent = next;
+        prefs.set("ttsAccent", accent);
+        // A language change is the one case that must re-touch the engine.
+        if (tts != null) {
+            try {
+                langStatus = tts.setLanguage(locale());
+                tts.setSpeechRate(rate());
+            } catch (Throwable t) {
+                lastError = t.getMessage();
+            }
+        }
+    }
+
+    String accent() {
+        return accent;
+    }
+
+    private float rate() {
+        try {
+            float r = Float.parseFloat(prefs.get("speechRate", "0.8"));
+            return clampRate(r);
+        } catch (Throwable t) {
+            return 0.8f;
+        }
+    }
+
+    private void init() {
+        ready = false;
+        configured = false;
+        langStatus = TextToSpeech.LANG_NOT_SUPPORTED;
+        lastError = null;
+        try {
+            TextToSpeech.OnInitListener listener = status -> {
+                if (status == TextToSpeech.SUCCESS) {
+                    ready = true;
+                    try {
+                        // One-time configuration: language + rate + pitch.
+                        langStatus = tts.setLanguage(locale());
+                        tts.setSpeechRate(rate());
+                        tts.setPitch(1.0f);
+                        configured = true;
+                    } catch (Throwable t) {
+                        lastError = t.getMessage();
+                    }
+                } else {
+                    ready = false;
+                    lastError = "init failed (" + status + ")";
+                }
+            };
+            if (engineName != null && !engineName.isEmpty()) {
+                tts = new TextToSpeech(ctx, listener, engineName);
+            } else {
+                tts = new TextToSpeech(ctx, listener);
+            }
+            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override public void onStart(String utteranceId) { }
+                @Override public void onDone(String utteranceId) { }
+                @Override public void onError(String utteranceId) { }
+            });
+        } catch (Throwable t) {
+            ready = false;
+            lastError = t.getMessage();
+        }
+    }
+
+    synchronized void setEngine(String pkg) {
+        engineName = (pkg == null || pkg.isEmpty()) ? null : pkg;
+        prefs.set("ttsEngine", engineName);
+        if (tts != null) {
+            try { tts.stop(); tts.shutdown(); } catch (Throwable ignored) { }
+            tts = null;
+        }
+        init();
+    }
+
+    boolean isReady() {
+        return ready && configured;
+    }
+
+    boolean canSpeakEnglish() {
+        if (!isReady()) return false;
+        if (langStatus == TextToSpeech.LANG_MISSING_DATA || langStatus == TextToSpeech.LANG_NOT_SUPPORTED) return false;
+        return true;
+    }
+
+    JSONArray engines() {
+        JSONArray arr = new JSONArray();
+        try {
+            if (tts == null) return arr;
+            List<TextToSpeech.EngineInfo> list = new ArrayList<>(tts.getEngines());
+            for (TextToSpeech.EngineInfo e : list) {
+                JSONObject o = new JSONObject();
+                o.put("label", e.label == null ? e.name : e.label);
+                o.put("pkg", e.name);
+                o.put("default", e.name != null && e.name.equals(getDefaultEngine()));
+                arr.put(o);
+            }
+        } catch (Throwable ignored) { }
+        return arr;
+    }
+
+    private String getDefaultEngine() {
+        try {
+            if (tts == null) return "";
+            return tts.getDefaultEngine();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    JSONObject status() {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("ready", isReady());
+            o.put("english", canSpeakEnglish());
+            o.put("langStatus", langStatus);
+            o.put("accent", accent);
+            o.put("engine", engineName == null ? "" : engineName);
+            o.put("defaultEngine", getDefaultEngine());
+            o.put("error", lastError == null ? "" : lastError);
+            o.put("sdk", Build.VERSION.SDK_INT);
+        } catch (Exception ignored) { }
+        return o;
+    }
+
+    float clampRate(float rate) {
+        if (Float.isNaN(rate) || rate < 0.3f) return 0.3f;
+        if (rate > 2.0f) return 2.0f;
+        return rate;
+    }
+
+    void applyRateFromPrefs() {
+        if (tts == null) return;
+        try { tts.setSpeechRate(rate()); } catch (Throwable ignored) { }
+    }
+
+    private static String cacheName(String text) {
+        String key = text == null ? "" : text.trim().toLowerCase();
+        return "tts-" + Integer.toHexString(key.hashCode()) + "-" + Math.abs(key.length()) + ".wav";
+    }
+
+    private File cacheFile(String text) {
+        if (!cacheDir.exists() && !cacheDir.mkdirs()) return null;
+        return new File(cacheDir, cacheName(text));
+    }
+
+    /** Playable cache path for a text, or null when nothing was prefetched. */
+    String cachedPath(String text) {
+        try {
+            File f = cacheFile(text);
+            return f != null && f.exists() && f.length() > 0 ? f.getAbsolutePath() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Synthesises one word to the cache directory so a later tap is a local file
+     * playback. Never blocks the UI thread caller (TTS is async by nature).
+     */
+    synchronized boolean prefetch(String text) {
+        if (!canSpeakEnglish()) return false;
+        try {
+            File f = cacheFile(text);
+            if (f == null) return false;
+            if (f.exists() && f.length() > 0) return true;
+            if (f.exists() && !f.delete()) return false;
+            tts.setSpeechRate(rate());
+            int r = tts.synthesizeToFile(text, null, f, "prefetch-" + (++uttSeq));
+            return r == TextToSpeech.SUCCESS;
+        } catch (Throwable t) {
+            lastError = t.getMessage();
+            return false;
+        }
+    }
+
+    synchronized boolean speak(String text, float rate) {
+        if (text == null || text.trim().isEmpty()) return false;
+        if (!canSpeakEnglish()) {
+            lastError = ready ? "english voice missing" : "tts not ready";
+            return false;
+        }
+        try {
+            // Always stop first: fast card flipping must never stack audio.
+            tts.stop();
+            tts.setSpeechRate(clampRate(rate));
+            String id = "moci-" + (++uttSeq);
+            int r = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);
+            return r == TextToSpeech.SUCCESS;
+        } catch (Throwable t) {
+            lastError = t.getMessage();
+            return false;
+        }
+    }
+
+    synchronized void stop() {
+        try { if (tts != null) tts.stop(); } catch (Throwable ignored) { }
+    }
+
+    synchronized void shutdown() {
+        try {
+            if (tts != null) { tts.stop(); tts.shutdown(); }
+        } catch (Throwable ignored) { }
+        tts = null;
+        ready = false;
+        configured = false;
+        try {
+            File[] files = cacheDir.listFiles();
+            if (files != null) for (File f : files) f.delete();
+        } catch (Throwable ignored) { }
+    }
+}

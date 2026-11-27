@@ -1,0 +1,25 @@
+# 构建中间产物（可随时重建）
+build/
+
+# 签名密钥：绝不入库，丢失只能卸载重装
+secrets/
+*.jks
+*.keystore
+keystore.properties
+
+# APK 默认不入库，但 dist/archive 下的历史版本需要显式放行（见文件末尾）
+*.apk
+*.idsig
+*.aab
+
+# 依赖与系统文件
+node_modules/
+.DS_Store
+Thumbs.db
+
+# 本地临时文件
+*.log
+*.tmp
+
+# ---- 归档例外：保留每个历史版本的 APK 与校验和 ----
+!dist/archive/**
