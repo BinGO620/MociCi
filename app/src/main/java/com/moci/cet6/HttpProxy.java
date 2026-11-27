@@ -69,9 +69,20 @@ final class HttpProxy {
                 int code = conn.getResponseCode();
                 InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
                 String text = in == null ? "" : readAll(in, 8 * 1024 * 1024);
+                StringBuilder extra = new StringBuilder();
+                if (code >= 400) {
+                    // A gateway rejection usually carries a JSON body explaining why.
+                    // A hole-in-the-middle 403 (WAF /校园网关 / 运营商) returns an
+                    // empty body, so the response headers are the only evidence left
+                    // of who answered. Surface both rather than a bare status code.
+                    extra.append(",\"server\":").append(org.json.JSONObject.quote(safeHeader(conn, "Server")));
+                    extra.append(",\"via\":").append(org.json.JSONObject.quote(safeHeader(conn, "Via")));
+                    extra.append(",\"waf\":").append(org.json.JSONObject.quote(safeHeader(conn, "X-Waf-Info")));
+                    extra.append(",\"emptyBody\":").append(text.isEmpty() ? "true" : "false");
+                }
                 result = "{\"ok\":" + (code >= 200 && code < 300 ? "true" : "false")
                         + ",\"status\":" + code
-                        + ",\"body\":" + org.json.JSONObject.quote(text) + "}";
+                        + ",\"body\":" + org.json.JSONObject.quote(text) + extra + "}";
             } catch (Throwable t) {
                 result = errorJson(t);
             } finally {
@@ -115,6 +126,15 @@ final class HttpProxy {
             }
             cb.done(result);
         });
+    }
+
+    private static String safeHeader(HttpURLConnection conn, String name) {
+        try {
+            String v = conn.getHeaderField(name);
+            return v == null ? "" : v;
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     private static String errorJson(Throwable t) {

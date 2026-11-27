@@ -32,7 +32,11 @@ test('tts: speak stops first, then re-asserts the locale', () => {
   // Re-asserting the locale each attempt is deliberate: a status cached at
   // onInit can be stale (voice pack installed later), and trusting it is what
   // made the app claim "no English voice" on a device that could speak.
-  const stopAt = body.indexOf('tts.stop()');
+  //
+  // Stopping may run through the stop() wrapper (which also releases the
+  // MediaPlayer used by the synthesize-then-play path), so both forms count.
+  const stops = [body.indexOf('stop();'), body.indexOf('tts.stop()')].filter(i => i >= 0);
+  const stopAt = stops.length ? Math.min.apply(null, stops) : -1;
   const langAt = body.indexOf('setLanguage(locale())');
   assert.ok(stopAt >= 0, 'speak stops the previous utterance');
   assert.ok(langAt >= 0, 'speak re-asserts the locale');

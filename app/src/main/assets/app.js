@@ -34,7 +34,7 @@
     import: null,
     session: null,
     settings: null,
-    speechRate: 0.8,
+    speechRate: 1.0,
     // Explicit default: TTS can be triggered before loadSettings() runs, and
     // the Java side declares a primitive float, which rejects undefined.
     speechAccent: 'uk',
@@ -200,10 +200,31 @@
     return 'online/' + String(text || '').toLowerCase().replace(/[^a-z0-9']/g, '_') + '.bin';
   }
 
-  /** Asks the native layer to pre-synthesise the next question's word. */
+  /** Asks the native layer to pre-synthesise a word so the next tap is a cache hit. */
   function prefetchWord(text) {
     if (!text || !native || !bridge) return;
     try { root.MociNative.ttsPrefetch(text); } catch (e) { }
+  }
+
+  /**
+   * Warms the words the user is about to hear: the current card plus the next
+   * few, and each card's collocations. Deeper than one because the user often
+   * flips and speaks several cards within a few seconds, and synthesis is
+   * asynchronous — queueing them now means later taps are instant.
+   */
+  function prefetchStudyCards(cards, index, ahead) {
+    if (!cards || !cards.length) return;
+    var depth = ahead == null ? 3 : ahead;
+    var end = Math.min(cards.length, index + depth + 1);
+    for (var i = index; i < end; i++) {
+      var c = cards[i];
+      if (!c) continue;
+      if (c.en) prefetchWord(c.en);
+      (c.collo || []).forEach(function (phrase) {
+        var split = selector.splitPhrase(phrase);
+        if (split && split.en && split.en !== c.en) prefetchWord(split.en);
+      });
+    }
   }
 
   function speakSystem(text) {
@@ -296,7 +317,7 @@
 
   function loadSettings() {
     state.settings = store.loadSettings();
-    state.speechRate = Number(state.settings.speechRate) || 0.8;
+    state.speechRate = Number(state.settings.speechRate) || 1.0;
     state.autoSpeak = state.settings.autoSpeak !== false;
     state.voiceSource = state.settings.voiceSource || 'system';
     state.onlineTts = state.settings.onlineTts || '';
@@ -1063,6 +1084,11 @@
     state.ttsIssueNotified = false;
     navigate('study');
     ensureTtsReady();
+    // Warm the first words before they are asked for. The study card had NO
+    // prefetch at all, so every tap waited for a full synthesis (≈2s on the
+    // device). Prefetching the current and next card makes the first tap and
+    // every "next" a cache hit.
+    prefetchStudyCards(cards, 0);
     if (state.autoSpeak) setTimeout(function () { speak(cards[0].en); }, 240);
   }
 
@@ -1166,13 +1192,15 @@
     } else {
       screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:14px' }, [
         el('button', { class: 'btn ghost', text: '上一张', disabled: s.index === 0 ? '' : null, onclick: function () {
-          if (s.index > 0) { s.index--; s.flipped = false; render(); }
+          if (s.index > 0) { s.index--; s.flipped = false; render(); prefetchStudyCards(s.cards, s.index); }
         } }),
         el('button', { class: 'btn', text: s.index === total - 1 ? '进入听写' : '下一张', onclick: function () {
           if (s.index === total - 1) { startDictation(); return; }
           s.index++;
           s.flipped = false;
           render();
+          // Keep the next few words warm so their taps stay instant.
+          prefetchStudyCards(s.cards, s.index);
           if (state.autoSpeak) speak(s.cards[s.index].en);
         } })
       ]));
@@ -2420,9 +2448,11 @@
       ['当前引擎', st.engine ? st.engine : '系统默认'],
       ['系统默认引擎', st.defaultEngine || '未知'],
       ['可用引擎数', engines.length + ' 个'],
+      ['当前音色', st.voice ? st.voice : '引擎默认'],
+      ['英语音色数', (st.voiceCount || 0) + ' 个'],
       ['最近错误', st.error || '无'],
       ['试朗读', (speakResult && speakResult.ok)
-        ? (speakResult.spoken === false ? '调用了但未发声' : '已提交给引擎')
+        ? (speakResult.spoken === false ? '调用了但未发声' : '已提交')
         : ('失败：' + ((speakResult && speakResult.error) || '未知'))],
       ['Android 版本', 'API ' + (st.sdk || '?')]
     ];
@@ -2468,15 +2498,39 @@
       temperature: 0
     })).then(function (r) {
       if (r && r.ok) { toast('连接成功'); return; }
-      var msg = (r && r.error) || ('HTTP ' + (r && r.status));
+      var status = r && r.status;
+      var msg = (r && r.error) || ('HTTP ' + status);
       var detail = '';
       try {
         var body = JSON.parse(r.body || '{}');
         if (body.error && body.error.message) detail = body.error.message;
+        else if (body.detail) detail = String(body.detail);
+        else if (body.message) detail = String(body.message);
       } catch (e) { }
       if (detail) msg = detail;
+
+      // 401/403 from the gateway itself always carries a JSON explanation
+      // ("API Token 无效或已吊销"). An empty 403 body therefore did NOT come from
+      // the gateway — it was produced by something in between (campus network,
+      // carrier, or a WAF), which no client-side setting can fix. Say so instead
+      // of showing a bare "HTTP 403" that looks like a key problem.
+      if (status === 403 && !detail) {
+        var who = [];
+        if (r && r.server) who.push('Server: ' + r.server);
+        if (r && r.via) who.push('Via: ' + r.via);
+        showError('请求被中途拦截（HTTP 403，响应体为空）。' +
+          '这不是 API Key 的问题——网关自己的拒绝会返回 JSON 说明。' +
+          '通常原因：当前网络（校园网 / 运营商 / 代理）拦截了该地址。' +
+          '请换一个网络（如手机热点或另一张 SIM）再试。' +
+          (who.length ? '［' + who.join('，') + '］' : ''));
+        return;
+      }
+      if (status === 401) {
+        showError('API Key 无效或已过期（HTTP 401）：' + (detail || '请到设置页检查 Key'));
+        return;
+      }
       // 404/400 usually means the model id does not exist on this gateway.
-      showError('测试失败：' + msg + '（模型：' + model + '）');
+      showError('测试失败：' + msg + '（模型：' + model + '，HTTP ' + (status || '?') + '）');
     });
   }
 

@@ -36,6 +36,7 @@ final class TtsEngine {
     private volatile String lastError;
     private volatile String accent;
     private volatile boolean configured;
+    private volatile String voiceName;
     private long uttSeq;
 
     TtsEngine(Context ctx, Prefs prefs) {
@@ -51,15 +52,69 @@ final class TtsEngine {
         return "us".equals(accent) ? Locale.US : Locale.UK;
     }
 
+    /**
+     * Chooses the best-sounding English voice the engine actually ships.
+     *
+     * Previously no voice was selected at all, so every engine fell back to its
+     * default — on most ROMs the smallest, fastest and most robotic formant
+     * voice. That default is what made speech sound mechanical. Engines publish
+     * several English voices ranked by Voice.QUALITY_*, so pick the highest
+     * quality one for the current accent.
+     *
+     * Never throws: an engine with no voices (or no getVoices()) simply keeps
+     * its default rather than losing speech entirely.
+     */
+    private void pickBestVoice() {
+        try {
+            if (tts == null) return;
+            if (Build.VERSION.SDK_INT < 21) return; // getVoices() needs API 21+
+            java.util.Set<android.speech.tts.Voice> voices;
+            try {
+                voices = tts.getVoices();
+            } catch (Throwable t) {
+                return;
+            }
+            if (voices == null || voices.isEmpty()) return;
+
+            String want = "us".equals(accent) ? "en_US" : "en_GB";
+            android.speech.tts.Voice best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (android.speech.tts.Voice v : voices) {
+                if (v == null || v.getLocale() == null) continue;
+                if (!"en".equalsIgnoreCase(v.getLocale().getLanguage())) continue;
+
+                boolean exact = want.equalsIgnoreCase(v.getLocale().toString());
+                // Quality dominates — that is the whole point of selecting.
+                int score = v.getQuality() * 100;
+                if (exact) score += 300;                 // right accent beats a better wrong one
+                if (!v.isNetworkConnectionRequired()) score += 40; // offline + instant
+                String n = v.getName() == null ? "" : v.getName().toLowerCase();
+                if (n.contains("local") || n.contains("embedded")) score += 10;
+                if (n.contains("network")) score -= 10;
+
+                if (score > bestScore) { bestScore = score; best = v; }
+            }
+            if (best != null) {
+                int r = tts.setVoice(best);
+                if (r == TextToSpeech.SUCCESS) voiceName = best.getName();
+                else lastError = "setVoice failed (" + r + ")";
+            }
+        } catch (Throwable t) {
+            lastError = t.getMessage(); // voice choice is an optimisation, never fatal
+        }
+    }
+
     void setAccent(String value) {
         String next = "us".equals(value) ? "us" : "uk";
         if (next.equals(accent) && configured) return;
         accent = next;
         prefs.set("ttsAccent", accent);
-        // A language change is the one case that must re-touch the engine.
+        // A language change is the one case that must re-touch the engine:
+        // the best-quality voice differs per accent.
         if (tts != null) {
             try {
                 langStatus = tts.setLanguage(locale());
+                pickBestVoice();
                 tts.setSpeechRate(rate());
             } catch (Throwable t) {
                 lastError = t.getMessage();
@@ -73,10 +128,10 @@ final class TtsEngine {
 
     private float rate() {
         try {
-            float r = Float.parseFloat(prefs.get("speechRate", "0.8"));
+            float r = Float.parseFloat(prefs.get("speechRate", "1.0"));
             return clampRate(r);
         } catch (Throwable t) {
-            return 0.8f;
+            return 1.0f;
         }
     }
 
@@ -85,13 +140,15 @@ final class TtsEngine {
         configured = false;
         langStatus = TextToSpeech.LANG_NOT_SUPPORTED;
         lastError = null;
+        voiceName = null;
         try {
             TextToSpeech.OnInitListener listener = status -> {
                 if (status == TextToSpeech.SUCCESS) {
                     ready = true;
                     try {
-                        // One-time configuration: language + rate + pitch.
+                        // One-time configuration: language + voice + rate + pitch.
                         langStatus = tts.setLanguage(locale());
+                        pickBestVoice();
                         tts.setSpeechRate(rate());
                         tts.setPitch(1.0f);
                         configured = true;
@@ -189,6 +246,22 @@ final class TtsEngine {
         }
     }
 
+    /** How many English voices the engine exposes; a low count explains poor audio. */
+    private int countEnglishVoices() {
+        try {
+            if (tts == null || Build.VERSION.SDK_INT < 21) return 0;
+            java.util.Set<android.speech.tts.Voice> vs = tts.getVoices();
+            if (vs == null) return 0;
+            int n = 0;
+            for (android.speech.tts.Voice v : vs) {
+                if (v != null && v.getLocale() != null && "en".equalsIgnoreCase(v.getLocale().getLanguage())) n++;
+            }
+            return n;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     JSONObject status() {
         JSONObject o = new JSONObject();
         try {
@@ -201,6 +274,8 @@ final class TtsEngine {
             o.put("accent", accent);
             o.put("engine", engineName == null ? "" : engineName);
             o.put("defaultEngine", getDefaultEngine());
+            o.put("voice", voiceName == null ? "" : voiceName);
+            o.put("voiceCount", countEnglishVoices());
             o.put("error", lastError == null ? "" : lastError);
             o.put("sdk", Build.VERSION.SDK_INT);
         } catch (Exception ignored) { }
