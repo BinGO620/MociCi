@@ -1,10 +1,10 @@
 {
-  "versionCode": 4,
-  "versionName": "0.9.3-pre",
+  "versionCode": 5,
+  "versionName": "0.9.4-pre",
   "stage": "pre-release",
-  "notes": "自查修复：pref 读取未解析 JSON 信封（API Key/开关全错）、TTS 参数与状态、UI 层原生桥覆盖测试。",
+  "notes": "修复相机拍照批改必然失败（照片读取走了存储沙箱）；照片改为离屏降采样+EXIF 旋转+压缩后再上传。",
   "deviceTested": {
     "date": "2026-11-27",
-    "result": "0.9.2 尚未真机复测；本版新增原生桥模拟测试 42 例"
+    "result": "相机修复尚未真机验证（路径缺陷已由代码静态证明）；新增相机路径测试 11 例"
   }
 }

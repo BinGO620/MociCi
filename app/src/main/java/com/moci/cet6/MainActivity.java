@@ -5,7 +5,11 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -33,6 +37,10 @@ public class MainActivity extends Activity {
     static final int REQ_PICK_FILE = 1001;
     static final int REQ_CAMERA = 1002;
     static final int REQ_SAVE_FILE = 1003;
+    /** Handwriting stays legible well below this; larger only costs bridge time. */
+    static final int MAX_UPLOAD_EDGE = 1600;
+    /** Hard ceiling for the JPEG that crosses the JS bridge (~1.1MB as base64). */
+    static final int MAX_UPLOAD_BYTES = 800 * 1024;
 
     private WebView web;
     private AtomicStore store;
@@ -233,26 +241,37 @@ public class MainActivity extends Activity {
             return;
         }
         if (requestCode == REQ_CAMERA) {
-            String cb = pending.remove(REQ_CAMERA);
-            String path = pending.remove(REQ_CAMERA + 1000);
+            final String cb = pending.remove(REQ_CAMERA);
+            final String path = pending.remove(REQ_CAMERA + 1000);
             if (resultCode != RESULT_OK || path == null) {
+                if (path != null) new File(path).delete();
                 jsResolve(cb, "{\"ok\":false,\"error\":\"cancelled\"}");
                 return;
             }
-            try {
+            // Decoding up to 16MB on the UI thread would freeze the WebView, so the
+            // whole read happens off-thread and resolves through jsResolve.
+            new Thread(() -> {
                 File f = new File(path);
-                if (!f.exists() || f.length() == 0) {
-                    jsResolve(cb, "{\"ok\":false,\"error\":\"照片为空\"}");
-                    return;
+                try {
+                    if (!f.exists() || f.length() == 0) {
+                        jsResolve(cb, "{\"ok\":false,\"error\":\"照片为空\"}");
+                        return;
+                    }
+                    // The capture lands in getCacheDir(), which is outside AtomicStore's
+                    // root (getFilesDir()), so it is read directly instead of through
+                    // the sandboxed store.
+                    byte[] jpeg = shrinkForUpload(f);
+                    String b64 = android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP);
+                    jsResolve(cb, "{\"ok\":true,\"base64\":" + org.json.JSONObject.quote(b64)
+                            + ",\"mime\":" + org.json.JSONObject.quote("image/jpeg")
+                            + ",\"bytes\":" + jpeg.length + "}");
+                } catch (Exception e) {
+                    jsResolve(cb, "{\"ok\":false,\"error\":" + org.json.JSONObject.quote(String.valueOf(e.getMessage())) + "}");
+                } finally {
+                    // Keep the cache clean; the bytes already live in the JS callback.
+                    if (f.exists() && !f.delete()) { /* best effort */ }
                 }
-                String b64 = store.readBase64(relToRoot(f));
-                String mime = "image/jpeg";
-                jsResolve(cb, "{\"ok\":true,\"base64\":" + org.json.JSONObject.quote(b64)
-                        + ",\"mime\":" + org.json.JSONObject.quote(mime)
-                        + ",\"bytes\":" + f.length() + "}");
-            } catch (Exception e) {
-                jsResolve(cb, "{\"ok\":false,\"error\":" + org.json.JSONObject.quote(String.valueOf(e.getMessage())) + "}");
-            }
+            }).start();
             return;
         }
         if (requestCode == REQ_SAVE_FILE) {
@@ -279,11 +298,104 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * A camera photo is 3–12MB. Base64 already inflates it by a third, and the
+     * string then has to cross the JS bridge through evaluateJavascript, where a
+     * payload this large regularly fails or stalls the WebView. Downsample to a
+     * legible width for handwriting, bake in the EXIF rotation (the vision model
+     * reads a sideways photo far worse), and re-compress with a quality cap.
+     */
+    private byte[] shrinkForUpload(File f) throws Exception {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(f.getAbsolutePath(), bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new Exception("照片无法解码");
+
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, MAX_UPLOAD_EDGE);
+        opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        Bitmap bmp = BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
+        if (bmp == null) throw new Exception("照片无法解码");
+
+        Bitmap oriented = applyExifRotation(f, bmp);
+        Bitmap scaled = scaleToMaxEdge(oriented, MAX_UPLOAD_EDGE);
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            int quality = 82;
+            scaled.compress(Bitmap.CompressFormat.JPEG, quality, out);
+            // Keep the worst case inside the bridge's comfort zone.
+            while (out.size() > MAX_UPLOAD_BYTES && quality > 40) {
+                out.reset();
+                quality -= 12;
+                scaled.compress(Bitmap.CompressFormat.JPEG, quality, out);
+            }
+            if (out.size() == 0) throw new Exception("照片压缩失败");
+            return out.toByteArray();
+        } finally {
+            if (scaled != oriented) scaled.recycle();
+            if (oriented != bmp) oriented.recycle();
+            if (!bmp.isRecycled()) bmp.recycle();
+        }
+    }
+
+    private static int sampleSizeFor(int w, int h, int maxEdge) {
+        int sample = 1;
+        int longEdge = Math.max(w, h);
+        while (longEdge / sample > maxEdge * 2) sample *= 2;
+        return Math.max(1, sample);
+    }
+
+    private static Bitmap scaleToMaxEdge(Bitmap src, int maxEdge) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        int longEdge = Math.max(w, h);
+        if (longEdge <= maxEdge) return src;
+        float ratio = maxEdge / (float) longEdge;
+        return Bitmap.createScaledBitmap(src, Math.max(1, Math.round(w * ratio)),
+                Math.max(1, Math.round(h * ratio)), true);
+    }
+
+    /** Cameras record orientation in EXIF rather than rotating pixels. */
+    private static Bitmap applyExifRotation(File f, Bitmap src) {
+        int degrees = 0;
+        boolean mirrored = false;
+        try {
+            ExifInterface exif = new ExifInterface(f.getAbsolutePath());
+            int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL);
+            switch (orientation) {
+                case ExifInterface.ORIENTATION_ROTATE_90: degrees = 90; break;
+                case ExifInterface.ORIENTATION_ROTATE_180: degrees = 180; break;
+                case ExifInterface.ORIENTATION_ROTATE_270: degrees = 270; break;
+                case ExifInterface.ORIENTATION_FLIP_HORIZONTAL: mirrored = true; break;
+                case ExifInterface.ORIENTATION_FLIP_VERTICAL: mirrored = true; degrees = 180; break;
+                case ExifInterface.ORIENTATION_TRANSPOSE: mirrored = true; degrees = 90; break;
+                case ExifInterface.ORIENTATION_TRANSVERSE: mirrored = true; degrees = 270; break;
+                default: break;
+            }
+        } catch (Throwable ignored) {
+            return src;
+        }
+        if (degrees == 0 && !mirrored) return src;
+        Matrix m = new Matrix();
+        if (mirrored) m.postScale(-1f, 1f);
+        if (degrees != 0) m.postRotate(degrees);
+        try {
+            Bitmap out = Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+            return out == null ? src : out;
+        } catch (Throwable t) {
+            return src;
+        }
+    }
+
     private byte[] readStoreFile(String rel) throws Exception {
-        File f = store.resolve(rel);
+        return readStoreFileBytes(store.resolve(rel));
+    }
+
+    private static byte[] readStoreFileBytes(File f) throws Exception {
         InputStream in = new java.io.FileInputStream(f);
         try {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            ByteArrayOutputStream bos = new ByteArrayOutputStream((int) Math.min(f.length(), 1024 * 1024));
             byte[] buf = new byte[64 * 1024];
             int n;
             while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
@@ -291,15 +403,6 @@ public class MainActivity extends Activity {
         } finally {
             in.close();
         }
-    }
-
-    private String relToRoot(File f) throws Exception {
-        String root = store.root().getCanonicalPath();
-        String p = f.getCanonicalPath();
-        if (!p.startsWith(root)) throw new Exception("outside root");
-        String rel = p.substring(root.length()).replace('\\', '/');
-        while (rel.startsWith("/")) rel = rel.substring(1);
-        return rel;
     }
 
     private void readUriResult(String cb, Uri uri, int maxBytes, boolean wantBase64) {
