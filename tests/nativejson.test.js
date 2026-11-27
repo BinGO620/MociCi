@@ -71,3 +71,11 @@ test('index.html loads nativejson before app.js', () => {
   assert.ok(nj > 0, 'nativejson.js must be included');
   assert.ok(nj < app, 'nativejson.js must load before app.js');
 });
+
+test('ui: el() assigns textarea/select value via the property, not setAttribute', () => {
+  const APP2 = fs.readFileSync(path.resolve(__dirname, '../app/src/main/assets/app.js'), 'utf8');
+  const helper = APP2.slice(APP2.indexOf('var el = function'), APP2.indexOf('var $ = function'));
+  // setAttribute('value') is ignored by <textarea>; editable boxes stayed empty.
+  assert.ok(helper.includes("k === 'value'"), 'el must special-case the value key');
+  assert.ok(helper.includes('node.value = v'), 'value must be assigned as a property');
+});

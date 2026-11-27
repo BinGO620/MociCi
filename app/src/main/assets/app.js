@@ -55,6 +55,12 @@
         else if (k === 'style') node.setAttribute('style', v);
         else if (k.slice(0, 2) === 'on') node.addEventListener(k.slice(2), v);
         else if (k === 'dataset') Object.keys(v).forEach(function (d) { node.dataset[d] = v[d]; });
+        else if (k === 'value') {
+          // setAttribute('value') is ignored by <textarea> and <select>; those
+          // need the live property. Using the attribute left editable boxes
+          // silently empty (template editor, collocation fields).
+          node.value = v;
+        }
         else node.setAttribute(k, v === true ? '' : v);
       });
     }
@@ -78,14 +84,23 @@
     toastTimer = setTimeout(function () { t.classList.remove('show'); }, 1900);
   }
 
+  var errorTimer = null;
   function showError(msg) {
     if (!msg) return;
     state.lastError = msg;
+    state.errorLog = state.errorLog || [];
+    state.errorLog.push(new Date().toISOString() + ' ' + msg);
+    if (state.errorLog.length > 50) state.errorLog.shift();
     try { console.error('[Moci] ' + msg); } catch (e) { }
     var bar = $('#errbar');
     if (!bar) return;
     $('#errbar .msg', bar).textContent = msg;
     bar.classList.add('show');
+    // Auto-dismiss: a persistent floating bar is what made the UI feel frozen.
+    clearTimeout(errorTimer);
+    errorTimer = setTimeout(function () {
+      bar.classList.remove('show');
+    }, 6000);
   }
 
   function dismissError() {
@@ -236,9 +251,10 @@
   }
 
   /**
-   * Runs once before the first study session: Android TTS engines on some ROMs
-   * ship without an English voice pack, and users otherwise think the app broke.
-   * One lightweight probe, never blocking, never repeated.
+   * TTS pre-flight. Only warns when the engine itself failed to initialise —
+   * a negative language probe is not proof of failure (some ROMs report
+   * LANG_MISSING_DATA at init yet synthesise fine). The real verdict comes from
+   * an actual speak() attempt.
    */
   var ttsProbed = false;
   function ensureTtsReady() {
@@ -247,13 +263,14 @@
     if (!native || !bridge) return;
     try {
       var st = nativeParse(root.MociNative.ttsStatus(), null) || {};
-      if (!st.ready || !st.english) {
+      if (!st.ready) {
         if (!state.settings || state.settings.ttsWarned !== true) {
-          toast('英语发音不可用，可在设置里换 TTS 引擎或安装英语语音包');
+          toast('语音引擎未就绪，可在设置里更换 TTS 引擎');
           saveSettings({ ttsWarned: true });
         }
         return;
       }
+      // Silent warm-up; if it fails the per-tap failure path will speak up once.
       root.MociNative.ttsSpeak('test', state.speechRate);
       root.MociNative.ttsStop();
     } catch (e) { /* TTS probing is best-effort */ }
@@ -532,14 +549,40 @@
     ]);
   }
 
+  /** The effective template: the user's saved copy if any, else the built-in one. */
+  function effectiveTemplate() {
+    var s = store.loadSettings();
+    var custom = s.customTemplate;
+    return (typeof custom === 'string' && custom.trim()) ? custom : appmeta.TEMPLATE;
+  }
+
   function showTemplate() {
+    var current = effectiveTemplate();
+    var isCustom = current !== appmeta.TEMPLATE;
+    var ta = el('textarea', {
+      class: 'input', style: 'min-height:240px;font-family:ui-monospace,monospace;font-size:12.5px',
+      spellcheck: 'false', value: current
+    });
     var box = el('div', {}, [
-      el('p', { class: 'muted small', text: '复制后粘到任意 AI 对话框，把最后一行替换成你需要的内容。' }),
-      el('pre', { class: 'pre', style: 'background:var(--bg);padding:12px;border-radius:10px;max-height:46vh;overflow:auto', text: appmeta.TEMPLATE })
+      el('p', { class: 'muted small', text: '复制后粘到任意 AI 对话框，最后一行换成你要的内容。这个模板可以直接改，改完点「保存为我的模板」。' }),
+      ta,
+      isCustom ? el('div', { class: 'tiny', style: 'color:var(--brand);margin-top:6px', text: '当前使用的是你保存的自定义模板' }) : null
     ]);
     openSheet('AI 生成词表提示词', box, [
-      el('button', { class: 'btn ghost', text: '关闭', onclick: closeSheet }),
-      el('button', { class: 'btn', text: '复制提示词', onclick: function () { copy(appmeta.TEMPLATE); } })
+      el('button', { class: 'btn ghost', text: '恢复默认', onclick: function () {
+        saveSettings({ customTemplate: '' });
+        closeSheet();
+        toast('已恢复默认模板');
+        showTemplate();
+      } }),
+      el('button', { class: 'btn ghost', text: '保存为我的模板', onclick: function () {
+        var v = ta.value;
+        if (!v.trim()) { toast('模板不能为空'); return; }
+        saveSettings({ customTemplate: v === appmeta.TEMPLATE ? '' : v });
+        closeSheet();
+        toast(v === appmeta.TEMPLATE ? '与默认一致，已清除自定义' : '已保存');
+      } }),
+      el('button', { class: 'btn', text: '复制提示词', onclick: function () { copy(ta.value); } })
     ]);
   }
 
@@ -1916,6 +1959,32 @@
       el('button', { class: 'btn ghost sm', text: '返回', onclick: function () { navigate(null); } }),
       el('div', { class: 'grow center', style: 'font-weight:650', text: '数据自检' })
     ]));
+
+    // Storage write probe: proves the bridge can actually persist before the
+    // user trusts an import. This is the check that would have caught the
+    // "Method not found" failure immediately.
+    var probeBox = el('div', { class: 'card pad', style: 'margin-bottom:12px' },
+      [el('div', { class: 'muted small', text: '存储读写探测…' })]);
+    screen.appendChild(probeBox);
+    store.adapter.selfTest ? (function () {
+      var r = store.adapter.selfTest();
+      var allOk = r.writeText && r.readText && r.delete && r.stat && r.list;
+      probeBox.style.background = allOk ? 'var(--ok-soft)' : 'var(--danger-soft)';
+      probeBox.style.borderColor = allOk ? 'var(--ok)' : 'var(--danger)';
+      clear(probeBox);
+      probeBox.appendChild(el('div', {
+        style: 'font-weight:650;color:' + (allOk ? 'var(--ok)' : 'var(--danger)'),
+        text: allOk ? '✅ 存储读写正常（写入能真正落盘）' : '❌ 存储写入失败，导入不会保存'
+      }));
+      probeBox.appendChild(el('div', { class: 'tiny', style: 'margin-top:4px;color:var(--muted)',
+        text: 'write ' + (r.writeText ? '✓' : '✗') + ' · read ' + (r.readText ? '✓' : '✗') +
+              ' · delete ' + (r.delete ? '✓' : '✗') + ' · stat ' + (r.stat ? '✓' : '✗') +
+              ' · list ' + (r.list ? '✓' : '✗') }));
+      if (r.firstError) {
+        probeBox.appendChild(el('div', { class: 'tiny', style: 'color:var(--danger);margin-top:4px', text: '错误：' + r.firstError }));
+      }
+    })() : probeBox.appendChild(el('div', { class: 'tiny muted', text: '当前为浏览器存储，无原生探测' }));
+
     var rows = [
       ['词条数', c.words],
       ['进度条数', c.progress],
@@ -1941,8 +2010,18 @@
         el('div', { class: 'small', style: 'color:var(--danger)', text: '发现 ' + c.missingProgress.length + ' 个词条缺进度：' + c.missingProgress.join('、') })
       ]));
     }
+    var log = state.errorLog || [];
+    if (log.length) {
+      var logBox = el('details', { class: 'fold' }, [
+        el('summary', { text: '最近错误 ' + log.length + ' 条（排查用，可复制）' }),
+        el('pre', { class: 'pre', style: 'background:var(--bg);padding:10px;border-radius:8px;max-height:220px;overflow:auto;margin-top:8px', text: log.slice(-20).join('\n') })
+      ]);
+      screen.appendChild(logBox);
+    }
+
     screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:12px' }, [
-      el('button', { class: 'btn ghost', text: '重新检查', onclick: function () { render(); } })
+      el('button', { class: 'btn ghost', text: '重新检查', onclick: function () { render(); } }),
+      log.length ? el('button', { class: 'btn ghost', text: '复制错误日志', onclick: function () { copy(log.join('\n')); } }) : null
     ]));
     return screen;
   }
@@ -2034,12 +2113,25 @@
     var s = store.loadSettings();
 
     // AI
-    var baseUrl = el('input', { class: 'input', value: getPref('baseUrl', 'https://llm.ujn.edu.cn/v1') });
-    var model = el('input', { class: 'input', value: getPref('model', 'Qwen3.8-Flash-Next') });
-    var apiKey = el('input', { class: 'input', type: 'password', value: getPref('apiKey', ''), placeholder: '只保存在本机' });
+    // Saved values only. Unconfigured fields show a grey example instead of
+    // pre-filling a real-looking URL/model, which made it impossible to tell
+    // whether the app was already configured.
+    var savedBase = getPref('baseUrl', '');
+    var savedModel = getPref('model', '');
+    var baseUrl = el('input', {
+      class: 'input', value: savedBase,
+      placeholder: 'https://your-gateway.example.com/v1'
+    });
+    var model = el('input', {
+      class: 'input', value: savedModel,
+      placeholder: 'gpt-4o-mini 或 Qwen3.8-Flash-Next'
+    });
+    var apiKey = el('input', { class: 'input', type: 'password', value: getPref('apiKey', ''), placeholder: 'sk-... 只保存在本机' });
     var insecure = el('input', { type: 'checkbox', checked: getPrefBool('allowInsecureHttp', false) });
+    var configured = !!(savedBase && savedModel && getPref('apiKey', ''));
     var aiCard = el('div', { class: 'card pad' }, [
       el('div', { style: 'font-weight:650', text: '拍照批改（唯一 AI 用途）' }),
+      el('div', { class: 'tiny', style: 'color:' + (configured ? 'var(--ok)' : 'var(--muted)') + ';margin-top:2px', text: configured ? '✓ 已配置，可使用手写拍照批改' : '未配置。灰色文字是示例，不是你已有的设置' }),
       el('label', { class: 'field' }, [el('span', { text: '网关地址 BASE_URL' }), baseUrl]),
       el('label', { class: 'field' }, [el('span', { text: '模型' }), model]),
       el('label', { class: 'field' }, [el('span', { text: 'API Key' }), apiKey]),
@@ -2117,7 +2209,15 @@
     ]);
     var voiceCard = el('div', { class: 'card pad' }, [
       el('div', { style: 'font-weight:650', text: '发音' }),
-      ttsStatus ? el('div', { class: 'tiny ' + (ttsStatus.english ? 'muted' : ''), style: ttsStatus.english ? '' : 'color:var(--warn);margin-top:4px', text: ttsStatus.english ? '英语发音可用' : '当前设备的英语发音不可用，可换引擎或安装英语语音包' }) : null,
+      ttsStatus ? el('div', {
+        class: 'tiny',
+        style: 'margin-top:4px;color:' + (!ttsStatus.ready ? 'var(--danger)' : (ttsStatus.english ? 'var(--ok)' : 'var(--warn)')),
+        text: !ttsStatus.ready
+          ? '语音引擎启动失败。点「试听」可重试，或更换引擎'
+          : (ttsStatus.english
+            ? '英语语音已就绪（按「试听」确认真实出声）'
+            : '引擎未明确报告英语支持，但通常仍可发音。点「试听」验证')
+      }) : null,
       el('div', { class: 'small muted', style: 'margin-top:10px', text: '发音来源' }),
       voiceSource,
       el('div', { class: 'small muted', style: 'margin-top:6px', text: 'TTS 引擎' }),

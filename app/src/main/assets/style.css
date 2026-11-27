@@ -165,6 +165,11 @@ textarea.input{min-height:200px;resize:vertical;font-size:14px;line-height:1.6}
   position:fixed;left:10px;right:10px;bottom:calc(66px + env(safe-area-inset-bottom));
   background:var(--danger-soft);color:var(--danger);border:1px solid var(--danger);
   border-radius:12px;padding:10px 12px;font-size:12.5px;z-index:90;display:none;
+  /* The bar floats above the UI; without this it swallows taps on everything
+     behind it, which reads as "all buttons stopped working". Only its own
+     buttons stay clickable. */
+  pointer-events:none;
+  box-shadow:0 6px 20px rgba(0,0,0,.14);
 }
 .errbar.show{display:block}
 .errbar .msg{max-height:72px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -192,16 +197,26 @@ details.fold[open] > summary::before{transform:rotate(90deg)}
 .vrow{position:absolute;left:0;right:0;display:flex;align-items:center;gap:8px;padding:0 2px;border-bottom:1px solid var(--line)}
 
 .study-card{
-  background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px 20px;
-  box-shadow:var(--shadow);text-align:center;min-height:300px;
-  display:flex;flex-direction:column;justify-content:center;gap:10px;
+  background:var(--card);border:1px solid var(--line);border-radius:18px;padding:24px 18px;
+  box-shadow:var(--shadow);text-align:center;min-height:260px;
+  display:flex;flex-direction:column;justify-content:center;gap:8px;
 }
-.study-card .word{font-size:34px;font-weight:700;letter-spacing:-.02em;overflow-wrap:anywhere}
-.study-card .phon{color:var(--muted);font-size:15px}
-.study-card .pos{font-size:12.5px;color:var(--brand);font-weight:600}
-.study-card .zh{font-size:17px;margin-top:6px;overflow-wrap:anywhere}
-.study-card .collo{font-size:13.5px;color:var(--muted);text-align:left;margin-top:8px}
-.study-card .divider{height:1px;background:var(--line);margin:12px 0}
+/* The word is the whole point of the card: make it dominant and let long
+   entries wrap instead of shrinking. */
+.study-card .word{
+  font-size:46px;font-weight:800;letter-spacing:-.03em;line-height:1.15;
+  overflow-wrap:anywhere;margin:2px 0;
+}
+.study-card .phon{color:var(--muted);font-size:16.5px;letter-spacing:.01em}
+.study-card .pos{font-size:13px;color:var(--brand);font-weight:700}
+.study-card .zh{font-size:21px;font-weight:500;margin-top:8px;line-height:1.5;overflow-wrap:anywhere}
+.study-card .collo{font-size:14.5px;line-height:1.65;color:var(--muted);text-align:left;margin-top:10px}
+.study-card .divider{height:1px;background:var(--line);margin:14px 0}
+
+@media (max-width:360px){
+  .study-card .word{font-size:38px}
+  .study-card .zh{font-size:19px}
+}
 .hint{color:var(--muted);font-size:13px;margin-top:8px}
 
 .speak{
@@ -251,3 +266,5 @@ details.fold[open] > summary::before{transform:rotate(90deg)}
   background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn);
   border-radius:10px;padding:9px 11px;font-size:12.5px;line-height:1.5;margin:10px 0 2px;
 }
+/* Children of the pass-through bar must still receive taps. */
+.errbar .acts button{pointer-events:auto}

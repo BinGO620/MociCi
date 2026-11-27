@@ -133,10 +133,35 @@ final class TtsEngine {
         return ready && configured;
     }
 
+    /**
+     * Readiness is *not* a hard gate on the language status. Some engines report
+     * LANG_MISSING_DATA / LANG_NOT_SUPPORTED during onInit and still synthesise
+     * English once a voice is auto-downloaded or picked. We only treat a failure
+     * as fatal after a real speak() attempt fails, so the UI never claims "no
+     * English voice" based purely on a stale status code.
+     */
     boolean canSpeakEnglish() {
         if (!isReady()) return false;
-        if (langStatus == TextToSpeech.LANG_MISSING_DATA || langStatus == TextToSpeech.LANG_NOT_SUPPORTED) return false;
         return true;
+    }
+
+    /** True only when the engine positively reported a usable English locale. */
+    boolean englishConfirmed() {
+        return isReady() && langStatus != TextToSpeech.LANG_MISSING_DATA
+            && langStatus != TextToSpeech.LANG_NOT_SUPPORTED;
+    }
+
+    /** Re-attempts language selection; called before a speak and by diagnostics. */
+    boolean recheckLanguage() {
+        if (tts == null) return false;
+        try {
+            langStatus = tts.setLanguage(locale());
+            return langStatus != TextToSpeech.LANG_MISSING_DATA
+                && langStatus != TextToSpeech.LANG_NOT_SUPPORTED;
+        } catch (Throwable t) {
+            lastError = t.getMessage();
+            return false;
+        }
     }
 
     JSONArray engines() {
@@ -168,7 +193,10 @@ final class TtsEngine {
         JSONObject o = new JSONObject();
         try {
             o.put("ready", isReady());
-            o.put("english", canSpeakEnglish());
+            // "englishConfirmed" means the engine positively reported an English
+            // locale. It is informational only: the app never disables the speaker
+            // from it, because a negative answer is not proof of failure.
+            o.put("english", englishConfirmed());
             o.put("langStatus", langStatus);
             o.put("accent", accent);
             o.put("engine", engineName == null ? "" : engineName);
@@ -232,17 +260,24 @@ final class TtsEngine {
 
     synchronized boolean speak(String text, float rate) {
         if (text == null || text.trim().isEmpty()) return false;
-        if (!canSpeakEnglish()) {
-            lastError = ready ? "english voice missing" : "tts not ready";
+        if (!isReady()) {
+            lastError = "tts not ready";
             return false;
         }
         try {
             // Always stop first: fast card flipping must never stack audio.
             tts.stop();
+            // Re-assert the locale on every attempt: a status cached at onInit can
+            // be stale (voice pack downloaded later, or engine reporting late).
+            langStatus = tts.setLanguage(locale());
             tts.setSpeechRate(clampRate(rate));
             String id = "moci-" + (++uttSeq);
             int r = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);
-            return r == TextToSpeech.SUCCESS;
+            if (r != TextToSpeech.SUCCESS) {
+                lastError = "speak returned " + r;
+                return false;
+            }
+            return true;
         } catch (Throwable t) {
             lastError = t.getMessage();
             return false;

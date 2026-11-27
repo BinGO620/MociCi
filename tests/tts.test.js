@@ -26,11 +26,23 @@ test('tts: language and rate set once inside onInit', () => {
   assert.ok(init.includes('configured = true'));
 });
 
-test('tts: speak never reconfigures the engine first', () => {
+test('tts: speak stops first, then re-asserts the locale', () => {
   const speak = SRC.slice(SRC.indexOf('synchronized boolean speak('));
   const body = speak.slice(0, speak.indexOf('synchronized void stop()'));
-  assert.ok(!body.includes('setLanguage('), 'speak must not call setLanguage');
-  assert.ok(body.includes('tts.stop()'), 'speak stops the previous utterance');
+  // Re-asserting the locale each attempt is deliberate: a status cached at
+  // onInit can be stale (voice pack installed later), and trusting it is what
+  // made the app claim "no English voice" on a device that could speak.
+  const stopAt = body.indexOf('tts.stop()');
+  const langAt = body.indexOf('setLanguage(locale())');
+  assert.ok(stopAt >= 0, 'speak stops the previous utterance');
+  assert.ok(langAt >= 0, 'speak re-asserts the locale');
+  assert.ok(stopAt < langAt, 'stop must come before re-configuring');
+});
+
+test('tts: a negative language probe does not hard-block speaking', () => {
+  assert.ok(!SRC.includes('if (!canSpeakEnglish()) {'), 'canSpeakEnglish must not gate speak()');
+  const gate = SRC.slice(SRC.indexOf('boolean canSpeakEnglish()'));
+  assert.ok(gate.slice(0, 240).includes('return true'), 'a negative probe is not proof of failure');
 });
 
 test('tts: default accent is British', () => {

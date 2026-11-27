@@ -131,9 +131,13 @@ function check(name, ok, detail) {
   // 1. template sheet
   await cdp.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('查看提示词模板')).click()`);
   await sleep(400);
-  const tpl = await cdp.eval(`document.querySelector('#sheet .pre') ? document.querySelector('#sheet .pre').textContent : ''`);
+  // The template is now an editable textarea so users can customise it.
+  const tpl = await cdp.eval("document.querySelector('#sheet textarea') ? document.querySelector('#sheet textarea').value : ''");
   check('提示词模板可打开', tpl.includes('请按下面的固定格式输出词汇表'));
   check('模板含代码块硬要求', tpl.includes('请把最终词表放在一个'));
+  check('模板可按类别选择需求', tpl.includes('【六级】') && tpl.includes('【雅思】'));
+  check('模板不再混入考研示例', !tpl.includes('考研'));
+  check('模板可编辑并提供保存', (await cdp.eval("[...document.querySelectorAll('#sheet button')].some(b=>b.textContent.indexOf('保存为我的模板')>=0)")));
   await cdp.shot('02-template');
   await cdp.eval(`document.querySelector('#sheet').remove()`);
 

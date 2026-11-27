@@ -178,46 +178,77 @@
   }
 
   function nativeAdapter(bridge) {
-    function call(fn, a, b, c) {
+    // Android's @JavascriptInterface resolves methods by exact arity: calling a
+    // two-argument Java method with three JS arguments throws "Method not found".
+    // Always invoke with the precise number of arguments the method declares.
+    function invoke(args, run) {
       try {
-        var raw = bridge[fn](a, b, c);
-        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        var raw = run();
+        return typeof raw === 'string' ? JSON.parse(raw) : (raw || { ok: false, error: 'empty reply' });
       } catch (e) {
         return { ok: false, error: String(e && e.message ? e.message : e) };
       }
     }
+    function call0(fn) {
+      return invoke([], function () { return bridge[fn](); });
+    }
+    function call1(fn, a) {
+      return invoke([a], function () { return bridge[fn](a); });
+    }
+    function call2(fn, a, b) {
+      return invoke([a, b], function () { return bridge[fn](a, b); });
+    }
     return {
       id: 'native',
       read: function (rel) {
-        var r = call('readText', rel);
+        var r = call1('readText', rel);
         return r && r.ok ? r.text : null;
       },
       write: function (rel, text) {
-        var r = call('writeText', rel, text);
-        return r || { ok: false };
+        return call2('writeText', rel, text);
       },
       exists: function (rel) {
-        var r = call('stat', rel);
+        var r = call1('stat', rel);
         return !!(r && r.ok && r.exists);
       },
       list: function (dir) {
-        var r = call('list', dir);
+        var r = call1('list', dir);
         return r && r.ok && Array.isArray(r.items) ? r.items : [];
       },
       del: function (rel) {
-        return call('delete', rel) || { ok: false };
+        return call1('delete', rel) || { ok: false };
       },
       stat: function (rel) {
-        var r = call('stat', rel);
+        var r = call1('stat', rel);
         return r && r.ok ? r : { exists: false, size: 0, dir: false, mtime: 0 };
       },
       info: function () {
-        var r = call('storageInfo');
+        var r = call0('storageInfo');
         return r && r.ok ? r : {};
       },
       bytesOf: function (rel) {
-        var r = call('readText', rel);
+        var r = call1('readText', rel);
         return r && r.ok && r.text != null ? r.text.length : 0;
+      },
+      /** Diagnostics: proves which native methods actually answer on this device. */
+      selfTest: function () {
+        var probe = 'probe.json';
+        var payload = '{"ok":true}';
+        var results = {};
+        var w = call2('writeText', probe, payload);
+        results.writeText = !!(w && w.ok);
+        var r = call1('readText', probe);
+        results.readText = !!(r && r.ok && r.text === payload);
+        var d = call1('delete', probe);
+        results.delete = !!(d && d.ok);
+        var st = call1('stat', 'wordbook.json');
+        results.stat = !!(st && st.ok);
+        var li = call1('list', '');
+        results.list = !!(li && li.ok);
+        var inf = call0('storageInfo');
+        results.storageInfo = !!(inf && inf.ok);
+        results.firstError = (!results.writeText && w && w.error) || (!results.readText && r && r.error) || '';
+        return results;
       }
     };
   }
