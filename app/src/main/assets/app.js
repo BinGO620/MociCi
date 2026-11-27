@@ -502,19 +502,52 @@
     return s;
   }
 
+  /**
+   * Bottom navigation icons.
+   *
+   * These were emoji (🏠📖📊⚙️), which render differently on every ROM, carry
+   * their own colours that clash with the accent, and cannot follow the theme.
+   * Inline SVG inherits currentColor, so the active tab tints with the brand and
+   * dark mode needs no extra work.
+   */
+  var ICONS = {
+    home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/>',
+    book: '<path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H19v18H5.5A1.5 1.5 0 0 1 4 19.5z"/><path d="M8 3v18"/>',
+    data: '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 7 2.6h.1A1.7 1.7 0 0 0 9 1V1a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 2.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V7a1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"/>',
+    // Speaker with two sound arcs — replaces the 🔊 emoji used on every
+    // pronunciation control. An emoji here was especially jarring: it renders in
+    // its own colours and cannot follow the accent.
+    speak: '<path d="M4 9.5h3.2L12 5.6v12.8L7.2 14.5H4z"/><path d="M15.6 9.2a4 4 0 0 1 0 5.6"/><path d="M18.2 6.6a7.6 7.6 0 0 1 0 10.8"/>',
+    keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.2"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6 13.5h.01M9.5 13.5h.01M13 13.5h.01M16.5 13.5h5"/><path d="M8 16.5h8"/>',
+    camera: '<path d="M3 8.5A2 2 0 0 1 5 6.5h1.6l1.2-1.8h6.4l1.2 1.8H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.8" r="3.2"/>',
+    health: '<path d="M3 12h3.5l2-5 3 10 2.5-5H21"/>',
+    import: '<path d="M12 3v12"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4 20h16"/>'
+  };
+
+  /** Builds a 24x24 stroked SVG that inherits the surrounding text colour. */
+  function svgIcon(kind) {
+    var span = el('span', { class: 'ico' });
+    span.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" ' +
+      'fill="none" stroke="currentColor" stroke-width="1.7" ' +
+      'stroke-linecap="round" stroke-linejoin="round">' +
+      (ICONS[kind] || '') + '</svg>';
+    return span;
+  }
+
   function renderTabs() {
     var defs = [
-      ['home', '🏠', '首页'],
-      ['book', '📖', '词本'],
-      ['data', '📊', '数据'],
-      ['settings', '⚙️', '设置']
+      ['home', '首页'],
+      ['book', '词本'],
+      ['data', '数据'],
+      ['settings', '设置']
     ];
     var bar = el('nav', { class: 'tabs' });
     defs.forEach(function (d) {
       bar.appendChild(el('button', {
         class: state.tab === d[0] && !state.screen ? 'on' : '',
         onclick: function () { goTab(d[0]); }
-      }, [el('span', { class: 'ico', text: d[1] }), el('span', { text: d[2] })]));
+      }, [svgIcon(d[0]), el('span', { text: d[1] })]));
     });
     return bar;
   }
@@ -528,7 +561,7 @@
 
     if (!words.length) {
       var empty = el('div', { class: 'card pad empty' }, [
-        el('div', { class: 'big', text: '📥' }),
+        el('div', { class: 'big' }, [svgIcon('import')]),
         el('h2', { text: '词本还是空的' }),
         el('p', { class: 'muted small', text: '默词不内置任何词库。让任意 AI 按固定格式生成词表，复制粘贴即可入库。' }),
         el('div', { class: 'btn-row', style: 'margin-top:16px' }, [
@@ -558,15 +591,18 @@
 
     screen.appendChild(topbar('默词', '已掌握 ' + mastered + ' / ' + words.length + ' 词'));
 
+    // The subtitle already carries the "x / total", so each cell shows one figure
+    // and one plain label. Previously the middle cell read "已掌握 · / 4", which
+    // looked like a typo.
     var stats = el('div', { class: 'stat-grid' }, [
-      stat('已掌握', mastered, '/ ' + words.length),
-      stat('今日到期', due, '个词'),
-      stat('错词', wrong, '上限 30')
+      stat('已掌握', mastered),
+      stat('今日到期', due),
+      stat('错词', wrong)
     ]);
     screen.appendChild(stats);
 
     var scopes = [['all', '全部'], ['due', '今日到期'], ['new', '新词'], ['learning', '学习中'], ['mastered', '已掌握'], ['wrong', '错词']];
-    var chips = el('div', { class: 'chips' });
+    var chips = el('div', { class: 'chips scroll' });
     scopes.forEach(function (s) {
       chips.appendChild(el('button', {
         class: 'chip' + (state.scope === s[0] ? ' on' : ''),
@@ -588,16 +624,13 @@
     var unseen = Math.max(0, words.length - mastered - learning);
     var daysToFinish = newPerDay > 0 && unseen > 0 ? Math.ceil(unseen / newPerDay) : null;
     var info = el('div', { class: 'card pad' }, [
-      el('div', { class: 'split' }, [
-        el('div', { class: 'grow' }, [
-          el('div', { style: 'font-weight:650', text: '本次可学 ' + preview.length + ' 张卡（每组 ' + groupSize + ' 张 / 新词 ' + newPerDay + '）' }),
-          el('div', { class: 'muted small', text: daysToFinish == null
-            ? (unseen === 0 ? '没有新词了，当前是纯复习阶段；范围 ' + pool.length + ' 词' : '每日新词为 0，只复习不学新词；范围 ' + pool.length + ' 词')
-            : '按当前节奏约 ' + daysToFinish + ' 天学完剩余 ' + unseen + ' 个新词' })
-        ]),
-        el('div', { style: 'font-size:22px', text: '🎴' })
-      ]),
-      el('div', { class: 'btn-row', style: 'margin-top:14px' }, [
+      // The 🎴 emoji that sat here carried no information and was the only
+      // colourful element on an otherwise monochrome card, so it is gone.
+      el('div', { style: 'font-weight:650', text: '本次可学 ' + preview.length + ' 张卡（每组 ' + groupSize + ' 张 / 新词 ' + newPerDay + '）' }),
+      el('div', { class: 'muted small', style: 'margin-top:2px', text: daysToFinish == null
+        ? (unseen === 0 ? '没有新词了，当前是纯复习阶段；范围 ' + pool.length + ' 词' : '每日新词为 0，只复习不学新词；范围 ' + pool.length + ' 词')
+        : '按当前节奏约 ' + daysToFinish + ' 天学完剩余 ' + unseen + ' 个新词' }),
+      el('div', { class: 'btn-row', style: 'margin-top:16px' }, [
         el('button', {
           class: 'btn', text: preview.length ? '开始学习' : '没有可学的词',
           disabled: !preview.length ? '' : null,
@@ -1271,7 +1304,7 @@
         card.phonetic ? el('span', { class: 'phon', text: '/' + card.phonetic + '/' }) : null
       ]),
       el('div', { class: 'word', text: card.en }),
-      el('button', { class: 'speak', style: 'margin:6px auto 0', text: '🔊', onclick: function () { speak(card.en); } })
+      el('button', { class: 'speak', style: 'margin:6px auto 0', onclick: function () { speak(card.en); } }, [svgIcon('speak')])
     ]);
 
     if (s.flipped) {
@@ -1287,7 +1320,7 @@
           var split = selector.splitPhrase(c);
           list.appendChild(el('div', { class: 'split', style: 'margin-top:4px' }, [
             el('div', { class: 'grow', text: c }),
-            el('button', { class: 'speak sm', text: '🔊', onclick: function () { speak(split.en); } })
+            el('button', { class: 'speak sm', onclick: function () { speak(split.en); } }, [svgIcon('speak')])
           ]));
         });
         cardEl.appendChild(list);
@@ -1362,7 +1395,7 @@
       el('div', { class: 'muted small', text: '15 题打乱顺序，含短语题。键入判分完全在本机进行。' })
     ]));
     screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:14px' }, [
-      el('button', { class: 'btn', text: '⌨️ 键入听写', onclick: function () {
+      el('button', { class: 'btn', onclick: function () {
         s.questions = selector.buildDictation(s.cards, { seed: Date.now() % 10000 });
         s.qIndex = 0;
         s.answers = [];
@@ -1372,8 +1405,8 @@
         // Auto-speak is on for dictation, so warm several answers up front
         // instead of just the first one.
         prefetchDictation(s.questions, 0);
-      } }),
-      el('button', { class: 'btn ghost', text: '📝 手写拍照批改', onclick: function () { s.mode = 'hand'; render(); } })
+      } }, [svgIcon('keyboard'), '键入听写']),
+      el('button', { class: 'btn ghost', onclick: function () { s.mode = 'hand'; render(); } }, [svgIcon('camera'), '手写拍照批改'])
     ]));
     screen.appendChild(el('div', { class: 'muted tiny', style: 'margin-top:12px', text: '手写模式需要配置 API Key，仅手写照片会发送到 AI 批改。' }));
     return screen;
@@ -1422,7 +1455,7 @@
       el('div', { class: 'qi', text: q.prompt || (q.type === 'word' ? '（无中文提示）' : '') }),
       q.type === 'word' && q.noMeaning ? el('div', { class: 'qi-hint', style: 'color:var(--warn)', text: '仅凭发音拼写，无中文提示' }) : null,
       el('div', { class: 'btn-row', style: 'justify-content:center;margin-top:8px' }, [
-        el('button', { class: 'btn soft sm', text: '🔊 听发音', onclick: function () { speak(q.answer); } })
+        el('button', { class: 'btn soft sm', onclick: function () { speak(q.answer); } }, [svgIcon('speak'), '听发音'])
       ])
     ]));
 
@@ -1977,10 +2010,10 @@
           return el('span', { class: 'badge ' + (t === '拼写易错' || t === '词义混淆' ? 'err' : 'gray'), text: t });
         })) : null
       ]),
-      el('button', { class: 'speak', text: '🔊', onclick: function (e) {
+      el('button', { class: 'speak', onclick: function (e) {
         e.stopPropagation();
         speak(w.en);
-      } })
+      } }, [svgIcon('speak')])
     ]);
   }
 
@@ -2042,7 +2075,7 @@
         toast('已保存');
         navigate(null);
       } }),
-      el('button', { class: 'btn ghost', text: '🔊 发音', onclick: function () { speak(w.en); } })
+      el('button', { class: 'btn ghost', onclick: function () { speak(w.en); } }, [svgIcon('speak'), '发音'])
     ]));
     screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:10px' }, [
       el('button', { class: 'btn danger', text: '删除词条', onclick: function () {
@@ -2140,7 +2173,7 @@
     ]));
 
     screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:12px' }, [
-      el('button', { class: 'btn soft', text: '🩺 数据自检', onclick: function () { navigate('selfcheck'); } }),
+      el('button', { class: 'btn soft', onclick: function () { navigate('selfcheck'); } }, [svgIcon('health'), '数据自检']),
       el('button', { class: 'btn ghost', text: '备份与恢复', onclick: openBackups }),
       el('button', { class: 'btn ghost', text: '导出', onclick: openExport }),
       el('button', { class: 'btn ghost', text: '最近删除', onclick: openDeleted })

@@ -76,10 +76,13 @@ test('dictation: re-rendering the same question does not repeat audio', () => {
   assert.ok(/state\.dictationSpoken !==/.test(body), 'the guard must compare the current question');
 });
 
+// The entry button now renders an SVG icon alongside its label, so the anchor is
+// the label text. The label comes AFTER the handler body, so the slice must look
+// backwards from the label to find the handler.
 test('dictation: a fresh round speaks the first question again', () => {
-  const start = APP.indexOf("text: '⌨️ 键入听写'");
-  assert.ok(start > 0, 'the typed-dictation entry point must exist');
-  const handler = APP.slice(start, start + 600);
+  const at = APP.indexOf("'键入听写'");
+  assert.ok(at > 0, 'the typed-dictation entry point must exist');
+  const handler = APP.slice(Math.max(0, at - 500), at);
   assert.ok(/state\.dictationSpoken = null/.test(handler),
     'starting a new round must reset the guard, or question 1 stays silent');
 });
@@ -90,8 +93,9 @@ test('dictation: answers are prefetched so auto-speech is not delayed', () => {
   assert.ok(/ahead|depth/.test(body), 'it must look ahead, not just the current item');
   assert.ok(/prefetchDictation/.test(APP), 'the helper must be wired up');
   // Entering dictation and advancing both warm the queue.
-  const enter = APP.slice(APP.indexOf("text: '⌨️ 键入听写'"), APP.indexOf("text: '⌨️ 键入听写'") + 700);
-  assert.ok(/prefetchDictation/.test(enter), 'entering dictation must prefetch');
+  const at = APP.indexOf("'键入听写'");
+  assert.ok(/prefetchDictation/.test(APP.slice(Math.max(0, at - 500), at)),
+    'entering dictation must prefetch');
   const next = APP.indexOf("'下一题'");
   assert.ok(next > 0, 'the next-question button must exist');
   assert.ok(/prefetchDictation/.test(APP.slice(next, next + 500)),

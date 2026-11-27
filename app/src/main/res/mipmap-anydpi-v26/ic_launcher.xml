@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Adaptive icon. The launcher applies its own mask (circle, squircle, rounded
+    square…), so the artwork stays a separate layer instead of a pre-rounded
+    bitmap: baking the corners in produced a pale double-rounded ring on
+    launchers that use a different shape.
+
+    Layers come from tools/gen-icons.js, which draws the M + sound-wave artwork
+    analytically so every density is crisp. The monochrome layer feeds Android
+    13+ themed icons.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/icon_bg" />
-    <foreground android:drawable="@drawable/ic_foreground" />
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>

@@ -1,10 +1,10 @@
 {
-  "versionCode": 11,
-  "versionName": "0.9.10-pre",
+  "versionCode": 12,
+  "versionName": "0.9.11-pre",
   "stage": "pre-release",
-  "notes": "修复语速对真人发音无效、语速条拉不到最右；移除第三方 TTS 配置区；403 增加网络层自检并提示校内 API 需连校园网。",
+  "notes": "UI 设计期：极简留白（去边框卡片、数字分割线统计、单行滚动筛选）、全站 SVG 线性图标替代 emoji、自适应应用图标（M+声波）。",
   "deviceTested": {
-    "date": "2026-11-27",
-    "result": "403 根因已确认为校内 API 仅限校园网；语速与滑块样式需真机复测"
+    "date": "2026-11-28",
+    "result": "UI 改动经浏览器截图验证；真机字体与图标清晰度待确认"
   }
 }

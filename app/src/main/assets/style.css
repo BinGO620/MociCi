@@ -40,14 +40,24 @@ a{color:var(--brand)}
 .screen{flex:1;padding:16px 16px 8px;max-width:720px;width:100%;margin:0 auto}
 .screen.narrow{max-width:560px}
 
-.topbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;min-height:32px}
-.topbar h1{font-size:19px;margin:0;font-weight:650;letter-spacing:-.01em}
+.topbar{display:flex;align-items:center;gap:10px;margin-bottom:18px;min-height:32px}
+.topbar h1{font-size:20px;margin:0;font-weight:700;letter-spacing:-.02em}
 .topbar .sub{color:var(--muted);font-size:12.5px}
 .topbar .spacer{flex:1}
 
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
-.card.pad{padding:16px}
-.card + .card{margin-top:12px}
+/* Minimal-by-whitespace layout.
+   Cards used to carry a border AND a shadow on every block, so the screen read
+   as a stack of boxes and hierarchy came from outlines. Now a card is only a
+   quiet container: no border, the faintest possible shadow, and sections are
+   separated by space. Grouping is expressed by spacing and type weight. */
+.card{
+  background:var(--card);border:0;border-radius:var(--radius);
+  box-shadow:0 1px 2px rgba(16,24,40,.04);
+}
+.card.pad{padding:18px 16px}
+.card + .card{margin-top:10px}
+/* A card used only as a divider-free section loses its surface entirely. */
+.card.plain{background:transparent;box-shadow:none;padding-left:0;padding-right:0}
 .muted{color:var(--muted)}
 .small{font-size:12.5px}
 .tiny{font-size:11.5px}
@@ -87,6 +97,11 @@ a{color:var(--brand)}
 .btn:disabled:active{transform:none;filter:none;box-shadow:none}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap}
 .btn-row .btn{flex:1 1 140px}
+/* Inline icons inside buttons: sized to the text, inheriting its colour so the
+   ghost/soft variants tint correctly. */
+.btn .ico,.chip .ico{display:inline-flex;align-items:center}
+.btn .ico svg{width:18px;height:18px}
+.btn.sm .ico svg{width:16px;height:16px}
 
 .field{display:block;margin:12px 0}
 .field > span{display:block;font-size:12.5px;color:var(--muted);margin-bottom:6px}
@@ -138,15 +153,22 @@ input.input[type=range]::-moz-range-thumb{
 .tabs button{
   display:flex;flex-direction:column;align-items:center;gap:3px;
   padding:9px 0 8px;font-size:11px;color:var(--muted);min-height:54px;
-  transition:transform .08s ease,background .08s ease;
+  transition:transform .08s ease,background .08s ease,color .08s ease;
   -webkit-user-select:none;user-select:none;
 }
-.tabs button .ico{font-size:18px;line-height:1}
+.tabs button .ico{font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center}
+/* SVG icons inherit currentColor, so the active tab tints with the brand and
+   dark mode needs no separate artwork. */
+.tabs button .ico svg{width:22px;height:22px;display:block}
 .tabs button.on{color:var(--brand);font-weight:600}
 .tabs button:active{background:var(--line);transform:scale(.94)}
 
 .empty{padding:28px 18px;text-align:center}
 .empty .big{font-size:40px;line-height:1.1;margin-bottom:10px}
+/* Empty-state glyph is an SVG now, so it must inherit the muted colour instead
+   of the huge emoji font size. */
+.empty .big .ico{display:inline-flex}
+.empty .big svg{width:44px;height:44px;color:var(--muted)}
 .empty h2{font-size:17px;margin:0 0 6px}
 
 .steps{text-align:left;margin:16px auto 0;max-width:420px;padding:0;list-style:none;counter-reset:s}
@@ -162,10 +184,20 @@ input.input[type=range]::-moz-range-thumb{
 .progressbar{height:6px;border-radius:999px;background:var(--line);overflow:hidden}
 .progressbar > i{display:block;height:100%;background:var(--brand);border-radius:999px}
 
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:10px}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
-.stat .n{font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.2}
-.stat .l{font-size:11.5px;color:var(--muted);margin-top:2px}
+/* Home summary: three numbers, no boxes. The figures carry the hierarchy; a
+   hairline between them is enough separation and keeps the screen calm. */
+.stat-grid{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:0;margin:4px 0 22px;
+}
+.stat{padding:2px 0;position:relative}
+.stat + .stat{padding-left:16px}
+.stat + .stat::before{
+  content:"";position:absolute;left:0;top:6px;bottom:6px;
+  width:1px;background:var(--line);
+}
+.stat .n{font-size:26px;font-weight:750;letter-spacing:-.03em;line-height:1.15;font-variant-numeric:tabular-nums}
+.stat .l{font-size:11.5px;color:var(--muted);margin-top:3px;font-weight:500}
 
 .chart{display:flex;align-items:flex-end;gap:5px;height:108px;margin-top:12px}
 .chart .col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;height:100%}
@@ -246,10 +278,14 @@ details.fold[open] > summary::before{transform:rotate(90deg)}
 .vlist .spacer{width:1px}
 .vrow{position:absolute;left:0;right:0;display:flex;align-items:center;gap:8px;padding:0 2px;border-bottom:1px solid var(--line)}
 
+/* The card has no fixed minimum height: a one-word front only needs ~180px, and
+   reserving 260px left a large dead zone between the word and the flip button.
+   Height now follows the content, so the front is compact and the back grows to
+   fit the meanings. */
 .study-card{
-  background:var(--card);border:1px solid var(--line);border-radius:18px;padding:24px 18px;
-  box-shadow:var(--shadow);text-align:center;min-height:260px;
-  display:flex;flex-direction:column;justify-content:center;gap:8px;
+  background:var(--card);border:0;border-radius:20px;padding:26px 18px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04);text-align:center;
+  display:flex;flex-direction:column;justify-content:center;gap:6px;
 }
 /* The word is the whole point of the card: make it dominant and let long
    entries wrap instead of shrinking. */
@@ -296,6 +332,11 @@ details.fold[open] > summary::before{transform:rotate(90deg)}
 .speak:active{transform:scale(.88);background:var(--brand);color:#fff}
 .speak:disabled{opacity:.4}
 .speak.sm{width:30px;height:30px;font-size:14px}
+/* The speaker glyph is an inline SVG now; without an explicit size it collapses
+   to nothing and the button renders as an empty circle. */
+.speak .ico{display:inline-flex;align-items:center;justify-content:center}
+.speak svg{width:20px;height:20px}
+.speak.sm svg{width:16px;height:16px}
 
 .qi{font-size:22px;font-weight:650;text-align:center;margin:10px 0;overflow-wrap:anywhere}
 .qi-hint{text-align:center;color:var(--muted);font-size:13px}
@@ -322,6 +363,15 @@ details.fold[open] > summary::before{transform:rotate(90deg)}
 .chip:active{transform:scale(.94);background:var(--line);color:var(--text)}
 .chip.on:active{background:var(--brand);color:#fff;filter:brightness(.8)}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+/* Filter strips: six scopes wrapped onto two lines and left an orphan chip,
+   which looked accidental. A single scrollable row keeps the height fixed and
+   reads as a deliberate filter bar. */
+.chips.scroll{
+  flex-wrap:nowrap;overflow-x:auto;margin:12px -16px 18px;padding:0 16px 2px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;
+}
+.chips.scroll::-webkit-scrollbar{display:none}
+.chips.scroll .chip{flex:0 0 auto}
 
 .split{display:flex;gap:10px;align-items:center}
 .grow{flex:1;min-width:0}
