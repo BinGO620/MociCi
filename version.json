@@ -1,10 +1,10 @@
 {
-  "versionCode": 12,
-  "versionName": "0.9.11-pre",
+  "versionCode": 13,
+  "versionName": "0.9.12-pre",
   "stage": "pre-release",
-  "notes": "UI 设计期：极简留白（去边框卡片、数字分割线统计、单行滚动筛选）、全站 SVG 线性图标替代 emoji、自适应应用图标（M+声波）。",
+  "notes": "应用图标改为 M + 笔（呼应听写），保持自适应图标结构。",
   "deviceTested": {
     "date": "2026-11-28",
-    "result": "UI 改动经浏览器截图验证；真机字体与图标清晰度待确认"
+    "result": "图标经圆形遮罩预览验证；真机桌面需确认"
   }
 }

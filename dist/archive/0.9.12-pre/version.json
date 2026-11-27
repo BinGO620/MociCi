@@ -1,0 +1,10 @@
+{
+  "versionCode": 13,
+  "versionName": "0.9.12-pre",
+  "stage": "pre-release",
+  "notes": "应用图标改为 M + 笔（呼应听写），保持自适应图标结构。",
+  "deviceTested": {
+    "date": "2026-11-28",
+    "result": "图标经圆形遮罩预览验证；真机桌面需确认"
+  }
+}

@@ -2,15 +2,17 @@
 /**
  * Launcher icon generator — zero dependencies (pure zlib + CRC32).
  *
- * Produces an ADAPTIVE icon, not a pre-rounded bitmap: a solid background layer
- * plus a foreground layer whose artwork stays inside the 66% safe zone. Android
- * applies its own mask (circle, squircle, rounded square…), so baking the corners
- * in — as the AI-generated reference did — produced two rounded edges and a pale
- * ring on launchers using a different shape.
+ * Design: a bold geometric "M" with a pen set diagonally beside it — the pen is
+ * what the app is actually for (dictation). A sound wave was considered as a
+ * third element but dropped: three marks turn to mush at 48dp, and the pen alone
+ * says "write what you hear" more directly.
  *
- * Design: geometric white "M" with a sound-wave arc to its right, matching the
- * selected concept. Everything is drawn analytically so every density stays
- * crisp, and the same geometry feeds the legacy square PNG for old launchers.
+ * Outputs an ADAPTIVE icon (separate background/foreground layers) rather than a
+ * pre-rounded bitmap. Android applies the launcher's own mask, so baking corners
+ * in produced a pale double-rounded ring on launchers using another shape.
+ *
+ * Every shape is sampled with 4x4 supersampling, which gives clean antialiasing
+ * for arbitrary outlines and keeps every density crisp.
  */
 'use strict';
 const zlib = require('zlib');
@@ -32,6 +34,7 @@ const ADAPTIVE = {
 };
 
 const BRAND = [47, 107, 255]; // #2F6BFF — same blue as the UI accent
+const SS = 4;                 // supersamples per axis
 
 const CRC_TABLE = (() => {
   const t = new Int32Array(256);
@@ -85,6 +88,8 @@ function encodePng(size, pixels) {
   ]);
 }
 
+/* ---------------------------------------------------------------- geometry */
+
 function distToSeg(px, py, ax, ay, bx, by) {
   const vx = bx - ax, vy = by - ay;
   const wx = px - ax, wy = py - ay;
@@ -94,25 +99,28 @@ function distToSeg(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
 }
 
-/** Smooth coverage from a signed distance: 1 inside, 0 outside, antialiased edge. */
-function cov(dist, halfWidth, px) {
-  return Math.max(0, Math.min(1, (halfWidth - dist) / px + 0.5));
+/** Point in triangle (any winding). */
+function inTri(px, py, ax, ay, bx, by, cx, cy) {
+  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
+  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
+  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
 }
 
 /**
- * Foreground artwork in a unit box (0..1), drawn with crisp line segments.
- * Kept inside the adaptive safe zone: the mask may crop anything beyond 0.66,
- * so the glyph occupies roughly the middle 56%.
+ * Foreground artwork in pixel space.
+ *
+ * The three marks are described as predicates and sampled on a 4x4 grid, so
+ * edges are antialiased without needing an analytic distance field for the pen.
  */
-function drawForeground(size, opts) {
-  const px = Buffer.alloc(size * size * 4);
-  const pxW = 1.6 / size;                    // antialias width in unit space
-  const stroke = size * 0.070;               // M stroke thickness
-
-  // Geometric M: left stem, two diagonals, right stem.
-  const x0 = size * 0.200, x1 = size * 0.520;      // M sits left of centre
-  const yTop = size * 0.325, yBot = size * 0.675;
-  const midY = size * 0.555;
+function glyphAt(x, y, size) {
+  // --- M: two stems plus two diagonals
+  const stroke = size * 0.074;
+  const x0 = size * 0.150, x1 = size * 0.445;
+  const yTop = size * 0.345, yBot = size * 0.655;
+  const midY = size * 0.548;
   const cxM = (x0 + x1) / 2;
   const segs = [
     [x0, yBot, x0, yTop],
@@ -120,69 +128,79 @@ function drawForeground(size, opts) {
     [cxM, midY, x1, yTop],
     [x1, yTop, x1, yBot]
   ];
+  for (const [ax, ay, bx, by] of segs) {
+    if (distToSeg(x, y, ax, ay, bx, by) <= stroke / 2) return true;
+  }
 
-  // Sound wave: two arcs opening to the right, like a speaker emitting sound.
-  // The sweep has to be wide (~90° total): a narrow wedge reads as an arrowhead
-  // rather than a sound wave.
-  const wcx = size * 0.545, wcy = size * 0.500;
-  const arcs = [
-    { r: size * 0.100, half: 0.78, w: size * 0.044 },
-    { r: size * 0.185, half: 0.70, w: size * 0.044 }
-  ];
+  // --- Pen: diagonal body with a nib, tilted like it is writing.
+  // Local +x points toward the nib (down-left on screen).
+  const px0 = size * 0.700, py0 = size * 0.500;   // pen centre
+  const ang = 112 * Math.PI / 180;                // nib points down, slightly left
+  const L = size * 0.470, W = size * 0.086;
+  const ca = Math.cos(-ang), sa = Math.sin(-ang);
+  const dx = x - px0, dy = y - py0;
+  const lx = dx * ca - dy * sa;
+  const ly = dx * sa + dy * ca;
 
+  const nibLen = L * 0.30;                        // nib is a third of the pen
+  const bodyEnd = L * 0.5 - nibLen;               // where the nib starts
+  const bodyStart = -L * 0.5;
+  // barrel
+  if (lx >= bodyStart && lx <= bodyEnd && Math.abs(ly) <= W / 2) return true;
+  // rounded cap at the far end
+  if (Math.hypot(lx - bodyStart, ly) <= W / 2) return true;
+  // nib: slender triangle tapering to a sharp point
+  if (lx > bodyEnd && lx <= L * 0.5) {
+    const t = (lx - bodyEnd) / nibLen;            // 0 at base, 1 at tip
+    const halfW = (W / 2) * (1 - t) * 1.05;
+    if (Math.abs(ly) <= halfW) return true;
+  }
+
+  return false;
+}
+
+/** Foreground: white artwork on transparent, sized for the adaptive safe zone. */
+function drawForeground(size) {
+  const px = Buffer.alloc(size * size * 4);
+  const step = 1 / SS;
+  const total = SS * SS;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
+      let hits = 0;
+      for (let sy = 0; sy < SS; sy++) {
+        for (let sx = 0; sx < SS; sx++) {
+          if (glyphAt(x + (sx + 0.5) * step, y + (sy + 0.5) * step, size)) hits++;
+        }
+      }
+      if (!hits) continue;
       const i = (y * size + x) * 4;
-      const sx = x + 0.5, sy = y + 0.5;
-
-      // --- M
-      let dM = Infinity;
-      for (const [ax, ay, bx, by] of segs) {
-        dM = Math.min(dM, distToSeg(sx, sy, ax, ay, bx, by));
-      }
-      let aM = cov(dM, stroke / 2, 1);
-
-      // --- sound arcs (wedge with soft ends)
-      let aW = 0;
-      for (const arc of arcs) {
-        const dx = sx - wcx, dy = sy - wcy;
-        const r = Math.hypot(dx, dy);
-        const dRing = Math.abs(r - arc.r);
-        if (dRing > arc.w) continue;
-        // Angle from +x axis; keep a forward-open wedge.
-        const ang = Math.atan2(dy, dx);
-        if (Math.abs(ang) > arc.half) continue;
-        const edge = Math.min(
-          cov(dRing, arc.w / 2, 1),
-          // soften the wedge ends so they are not cut off flat
-          Math.min(1, (arc.half - Math.abs(ang)) / 0.16)
-        );
-        aW = Math.max(aW, Math.max(0, edge));
-      }
-
-      const a = Math.max(aM, aW);
-      if (opts.backgroundOnly) {
-        px[i] = BRAND[0]; px[i + 1] = BRAND[1]; px[i + 2] = BRAND[2]; px[i + 3] = 255;
-        continue;
-      }
-      // White artwork on transparent, so Android can mask and add effects.
       px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
-      px[i + 3] = Math.round(255 * a);
+      px[i + 3] = Math.round(255 * hits / total);
     }
   }
   return px;
 }
 
-/** Legacy icon: brand rounded square with the same artwork composited on top. */
-function drawLegacy(size) {
-  const fg = drawForeground(size, {});
+/** Solid brand fill for the adaptive background layer. */
+function drawBackground(size) {
   const px = Buffer.alloc(size * size * 4);
-  const radius = size * 0.22;
-  const r = radius;
+  for (let i = 0; i < size * size; i++) {
+    px[i * 4] = BRAND[0];
+    px[i * 4 + 1] = BRAND[1];
+    px[i * 4 + 2] = BRAND[2];
+    px[i * 4 + 3] = 255;
+  }
+  return px;
+}
+
+/** Legacy icon: brand rounded square with the artwork composited on top. */
+function drawLegacy(size) {
+  const fg = drawForeground(size);
+  const px = Buffer.alloc(size * size * 4);
+  const r = size * 0.22;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
-      // rounded-rect coverage
       const dx = Math.max(Math.abs(x + 0.5 - size / 2) - (size / 2 - r), 0);
       const dy = Math.max(Math.abs(y + 0.5 - size / 2) - (size / 2 - r), 0);
       const bgA = Math.max(0, Math.min(1, r - Math.hypot(dx, dy) + 0.5));
@@ -196,19 +214,18 @@ function drawLegacy(size) {
   return px;
 }
 
-// Monochrome layer (Android 13+ themed icons): white glyph on transparent.
 function writeAll() {
   for (const [dir, size] of Object.entries(LEGACY)) {
     const out = path.join(RES, dir);
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(path.join(out, 'ic_launcher.png'), encodePng(size, drawLegacy(size)));
-    console.log('legacy ', dir, size);
+    console.log('legacy  ', dir, size);
   }
   for (const [dir, size] of Object.entries(ADAPTIVE)) {
     const out = path.join(RES, dir);
     fs.mkdirSync(out, { recursive: true });
-    fs.writeFileSync(path.join(out, 'ic_launcher_foreground.png'), encodePng(size, drawForeground(size, {})));
-    fs.writeFileSync(path.join(out, 'ic_launcher_background.png'), encodePng(size, drawForeground(size, { backgroundOnly: true })));
+    fs.writeFileSync(path.join(out, 'ic_launcher_foreground.png'), encodePng(size, drawForeground(size)));
+    fs.writeFileSync(path.join(out, 'ic_launcher_background.png'), encodePng(size, drawBackground(size)));
     console.log('adaptive', dir, size);
   }
 }

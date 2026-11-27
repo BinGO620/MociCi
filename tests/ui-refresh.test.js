@@ -88,13 +88,14 @@ test('icon: an adaptive icon is used so the launcher owns the mask', () => {
   assert.ok(/<monochrome/.test(ADAPTIVE), 'Android 13 themed icons need a monochrome layer');
 });
 
-test('icon: the artwork is the M with a sound wave', () => {
-  assert.ok(/Geometric M/.test(GEN), 'the M must be drawn geometrically');
-  assert.ok(/Sound wave/.test(GEN), 'the wave identifies the pronunciation purpose');
-  // The arcs must sweep wide, or they read as an arrowhead.
-  const arcs = /const arcs = \[([\s\S]*?)\];/.exec(GEN);
-  assert.ok(arcs, 'arc parameters must be explicit');
-  assert.ok(/half: 0\.7|half: 0\.8/.test(arcs[1]), 'a narrow wedge reads as an arrow');
+test('icon: the artwork is the M with a pen', () => {
+  assert.ok(/two stems plus two diagonals/.test(GEN), 'the M must be drawn geometrically');
+  // The app is a dictation trainer, so the second mark is a pen rather than a
+  // generic sound wave. A third element would turn to mush at 48dp.
+  assert.ok(/Pen: diagonal body with a nib/.test(GEN), 'the pen identifies dictation');
+  assert.ok(/nib/.test(GEN), 'a pen needs a tapered nib to be recognisable');
+  assert.ok(/glyphAt/.test(GEN), 'shapes are sampled per pixel, not scaled bitmaps');
+  assert.ok(/SS = 4/.test(GEN), 'supersampling keeps small sizes clean');
 });
 
 test('icon: all densities are generated, including the adaptive layers', () => {
