@@ -49,8 +49,10 @@ test('tts: a negative language probe does not hard-block speaking', () => {
   assert.ok(gate.slice(0, 240).includes('return true'), 'a negative probe is not proof of failure');
 });
 
-test('tts: default accent is British', () => {
-  assert.ok(SRC.includes('prefs.get("ttsAccent", "uk")'));
+// The default was British until the device user asked for US pronunciation as
+// the out-of-the-box choice. Both accents remain available in settings.
+test('tts: default accent is American', () => {
+  assert.ok(SRC.includes('prefs.get("ttsAccent", "us")'));
 });
 
 test('tts: en-GB maps to Locale.UK and en-US to Locale.US', () => {

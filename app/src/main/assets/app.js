@@ -37,11 +37,14 @@
     speechRate: 1.0,
     // Explicit default: TTS can be triggered before loadSettings() runs, and
     // the Java side declares a primitive float, which rejects undefined.
-    speechAccent: 'uk',
+    speechAccent: 'us',
     autoSpeak: true,
     voiceSource: 'system',
     onlineTts: '',
     ttsIssueNotified: false,
+    // Which dictation question was auto-spoken last, so a re-render of the same
+    // question does not repeat the audio.
+    dictationSpoken: null,
     lastError: null,
     errorLog: []
   };
@@ -227,6 +230,21 @@
     }
   }
 
+  /**
+   * Warms the upcoming dictation answers. Dictation now speaks each question as
+   * it appears, so the answers have to be synthesised before they are reached;
+   * otherwise every question would stutter through a fresh synthesis.
+   */
+  function prefetchDictation(questions, index, ahead) {
+    if (!questions || !questions.length) return;
+    var depth = ahead == null ? 3 : ahead;
+    var end = Math.min(questions.length, index + depth + 1);
+    for (var i = index; i < end; i++) {
+      var q = questions[i];
+      if (q && q.answer) prefetchWord(q.answer);
+    }
+  }
+
   function speakSystem(text) {
     if (native && bridge) {
       try {
@@ -321,7 +339,7 @@
     state.autoSpeak = state.settings.autoSpeak !== false;
     state.voiceSource = state.settings.voiceSource || 'system';
     state.onlineTts = state.settings.onlineTts || '';
-    state.speechAccent = state.settings.ttsAccent === 'us' ? 'us' : 'uk';
+    state.speechAccent = state.settings.ttsAccent === 'uk' ? 'uk' : 'us';
     var dark = null;
     if (state.settings.theme === 'dark') dark = true;
     else if (state.settings.theme === 'light') dark = false;
@@ -1250,9 +1268,11 @@
         s.qIndex = 0;
         s.answers = [];
         s.mode = 'type';
+        state.dictationSpoken = null; // a fresh round must speak question 1 again
         render();
-        // Warm the first question so the very first tap is already from disk.
-        prefetchWord(s.questions[0] && s.questions[0].answer);
+        // Auto-speak is on for dictation, so warm several answers up front
+        // instead of just the first one.
+        prefetchDictation(s.questions, 0);
       } }),
       el('button', { class: 'btn ghost', text: '📝 手写拍照批改', onclick: function () { s.mode = 'hand'; render(); } })
     ]));
@@ -1271,6 +1291,15 @@
       screen.appendChild(el('p', { class: 'muted', text: '没有题目' }));
       return screen;
     }
+    // Dictation is a listening exercise: speak the thing being tested as soon as
+    // the question appears, so the user hears exactly what they must write. Fired
+    // once per question (not on every re-render, which would repeat it after a
+    // keystroke or a re-render of the same question).
+    if (state.autoSpeak && state.dictationSpoken !== (s.retryPass ? 'r' + idx : 'q' + idx)) {
+      state.dictationSpoken = s.retryPass ? 'r' + idx : 'q' + idx;
+      var speakText = q.answer;
+      setTimeout(function () { speak(speakText); }, 220);
+    }
     screen.appendChild(el('header', { class: 'topbar' }, [
       el('button', { class: 'btn ghost sm', text: '退出', onclick: abortSession }),
       el('div', { class: 'grow center small muted', text: (s.retryPass ? '错题重练 ' : '第 ') + (idx + 1) + ' / ' + Q.length + ' 题' })
@@ -1285,12 +1314,14 @@
     });
     screen.appendChild(dots);
 
+    // Dictation shows the meaning and, for phrases, the Chinese. It deliberately
+    // does NOT show the phonetic spelling, and does NOT show the owning word for
+    // a phrase: the owner ("affect") is a literal part of the answer
+    // ("affect health"), so printing it handed over the answer.
     screen.appendChild(el('div', { class: 'card pad' }, [
       el('div', { class: 'qi-hint', text: q.type === 'phrase' ? '写出英文短语' : '写出英文单词' }),
       el('div', { class: 'qi', text: q.prompt || (q.type === 'word' ? '（无中文提示）' : '') }),
-      q.type === 'word' && q.phonetic ? el('div', { class: 'qi-hint', text: '/' + q.phonetic + '/' }) : null,
       q.type === 'word' && q.noMeaning ? el('div', { class: 'qi-hint', style: 'color:var(--warn)', text: '仅凭发音拼写，无中文提示' }) : null,
-      q.type === 'phrase' ? el('div', { class: 'qi-hint', text: '所属：' + q.owner }) : null,
       el('div', { class: 'btn-row', style: 'justify-content:center;margin-top:8px' }, [
         el('button', { class: 'btn soft sm', text: '🔊 听发音', onclick: function () { speak(q.answer); } })
       ])
@@ -1339,7 +1370,8 @@
             if (s.retryPass) s.retryIndex++;
             else s.qIndex++;
             render();
-            prefetchWord(Q[isLast ? idx : (s.retryPass ? s.retryIndex : s.qIndex)].answer);
+            // Keep the listening queue warm past the new position.
+            prefetchDictation(Q, s.retryPass ? s.retryIndex : s.qIndex);
           }
         })
       ]));
@@ -1386,7 +1418,7 @@
     s.firstPass = allResults;
     s.mode = 'type'; // reuse the typed renderer; it reads the retry queue
     navigate('dictate');
-    prefetchWord(s.retryQuestions[0] && s.retryQuestions[0].answer);
+    prefetchDictation(s.retryQuestions, 0);
   }
 
   function applySessionResults(results, kind) {
@@ -2283,20 +2315,20 @@
       toast('语速 ' + rate.value);
       render();
     });
-    var accent = getPref('ttsAccent', 'uk');
+    var accent = getPref('ttsAccent', 'us');
     var accentChips = el('div', { class: 'chips' }, [
-      el('button', { class: 'chip' + (accent !== 'us' ? ' on' : ''), text: '英音 en-GB（默认）', onclick: function () {
-        setPref('ttsAccent', 'uk');
-        state.speechAccent = 'uk';
-        if (native) { try { root.MociNative.ttsSetAccent('uk'); } catch (e) { } }
-        toast('已切换英音');
-        render();
-      } }),
-      el('button', { class: 'chip' + (accent === 'us' ? ' on' : ''), text: '美音 en-US', onclick: function () {
+      el('button', { class: 'chip' + (accent === 'us' ? ' on' : ''), text: '美音 en-US（默认）', onclick: function () {
         setPref('ttsAccent', 'us');
         state.speechAccent = 'us';
         if (native) { try { root.MociNative.ttsSetAccent('us'); } catch (e) { } }
         toast('已切换美音');
+        render();
+      } }),
+      el('button', { class: 'chip' + (accent !== 'us' ? ' on' : ''), text: '英音 en-GB', onclick: function () {
+        setPref('ttsAccent', 'uk');
+        state.speechAccent = 'uk';
+        if (native) { try { root.MociNative.ttsSetAccent('uk'); } catch (e) { } }
+        toast('已切换英音');
         render();
       } })
     ]);

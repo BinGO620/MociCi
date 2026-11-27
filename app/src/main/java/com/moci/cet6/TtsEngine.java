@@ -43,7 +43,7 @@ final class TtsEngine {
         this.ctx = ctx.getApplicationContext();
         this.prefs = prefs;
         this.engineName = prefs.get("ttsEngine", null);
-        this.accent = prefs.get("ttsAccent", "uk");
+        this.accent = prefs.get("ttsAccent", "us");
         this.cacheDir = new File(ctx.getCacheDir(), "tts");
         init();
     }
