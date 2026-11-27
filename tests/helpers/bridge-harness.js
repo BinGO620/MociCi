@@ -23,7 +23,7 @@ const ARITY = {
   ttsCachedPath: 1, ttsOpenSettings: 0, ttsSetRate: 1,
   pickFile: 1, pickImage: 1, camera: 1, saveFile: 4,
   toast: 1, copyText: 1, applyTheme: 1, platform: 0,
-  httpPost: 3, httpGetBase64: 2
+  httpPost: 3, httpGetBase64: 2, audioFetch: 3, audioCachedPath: 1
 };
 
 function createBridge(opts) {
@@ -35,6 +35,13 @@ function createBridge(opts) {
   let clock = 0;
   let ttsAvailable = opts.tts !== false;
   let failWrites = opts.failWrites === true;
+  // Download-to-disk audio cache (mirrors HttpProxy.fetchToFile).
+  const audioFiles = {};
+  let audioFails = opts.audioFails === true;
+  // How async native callbacks answer JS. android-bridge.js installs
+  // __mociResolve inside the sandbox, which this module cannot reach, so the
+  // test that boots the sandbox hands the resolver in here.
+  let resolver = null;
 
   function norm(rel) {
     if (rel == null) throw new Error('empty path');
@@ -128,6 +135,30 @@ function createBridge(opts) {
     ttsCachedPath() { return okObj({ path: null }); },
     ttsOpenSettings() { return okObj({}); },
     ttsSetRate() { return okObj({}); },
+    /**
+     * Mirrors HttpProxy.fetchToFile: download straight to disk, report a path.
+     * A 200-with-empty-body provider is treated as a failure, exactly like the
+     * real implementation, so tests catch an empty clip being cached.
+     */
+    audioFetch(url, key, callbackId) {
+      calls.push({ name: 'audioFetch', argc: 3, url: url, key: key });
+      // The real bridge is asynchronous and answers through the callback id (a
+      // string), never a JS function — @JavascriptInterface only passes strings.
+      const reply = audioFails
+        ? JSON.stringify({ ok: false, error: 'simulated audio failure' })
+        : (function () {
+            const path = '/cache/audio/' + String(key).replace(/[^a-zA-Z0-9]/g, '_') + '.bin';
+            audioFiles[String(key)] = path;
+            return JSON.stringify({ ok: true, path: path, bytes: 1024, mime: 'audio/mpeg' });
+          })();
+      setTimeout(() => {
+        if (resolver) resolver(callbackId, reply);
+      }, 0);
+    },
+    audioCachedPath(key) {
+      const p = audioFiles[String(key)];
+      return okObj({ path: p || '' });
+    },
     pickFile() { return okObj({}); },
     pickImage() { return okObj({}); },
     camera() { return okObj({}); },
@@ -161,13 +192,22 @@ function createBridge(opts) {
     files,
     prefs,
     calls,
+    audioFiles,
     setTts(on) { ttsAvailable = on; },
     setFailWrites(on) { failWrites = on; },
+    setAudioFails(on) { audioFails = on; },
+    /** Route async replies to the sandbox's __mociResolve. */
+    setResolver(fn) { resolver = fn; },
     raw: impl
   };
 }
 
-/** Loads the browser modules into a fake global so they use our bridge. */
+/**
+ * Loads the browser modules into a fake global so they use our bridge.
+ * Returns sandbox.Moci (unchanged shape); sandbox.__mociResolve becomes
+ * available after android-bridge.js is evaluated, and callers wire it up with
+ * bridge.setResolver(...) when a test needs asynchronous native replies.
+ */
 function loadModules(bridgeProxy) {
   const base = path.resolve(__dirname, '../../app/src/main/assets');
   const vm = require('vm');

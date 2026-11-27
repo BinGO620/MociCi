@@ -234,12 +234,20 @@ details.fold[open] > summary::before{transform:rotate(90deg)}
 .study-card .phon{color:var(--muted);font-size:16.5px;letter-spacing:.01em}
 .study-card .pos{font-size:13px;color:var(--brand);font-weight:700}
 .study-card .zh{font-size:21px;font-weight:500;margin-top:8px;line-height:1.5;overflow-wrap:anywhere}
-/* One aligned row per part of speech: a fixed-width POS gutter keeps every
-   sense of a word starting at the same x, instead of "v." floating alone. */
+/* One row per part of speech.
+   A fixed POS gutter is only needed when a word HAS several parts of speech, so
+   that their meanings start at the same x. Most words have exactly one, and
+   reserving 46px + a 10px gap for a case that rarely happens left a conspicuous
+   hole between "v." and the meaning. Single-sense rows therefore let the POS sit
+   flush against the text; multi-sense rows keep an alignment gutter, narrowed so
+   the gap is no longer the dominant thing on the card. */
 .study-card .zh-rows{margin-top:8px;text-align:left}
-.study-card .zh-row{display:flex;gap:10px;align-items:baseline;margin-top:4px}
+.study-card .zh-row{display:flex;gap:6px;align-items:baseline;margin-top:4px}
 .study-card .zh-row:first-child{margin-top:0}
-.study-card .zh-pos{flex:0 0 auto;min-width:46px;font-size:13px;color:var(--brand);font-weight:700;line-height:1.5}
+.study-card .zh-pos{flex:0 0 auto;font-size:13px;color:var(--brand);font-weight:700;line-height:1.5;font-variant-numeric:tabular-nums}
+.study-card .zh-rows.single .zh-pos{min-width:0}
+.study-card .zh-rows.single .zh-row{gap:8px}
+.study-card .zh-rows.multi .zh-pos{min-width:28px}
 .study-card .zh-text{flex:1 1 auto;font-size:21px;font-weight:500;line-height:1.5;overflow-wrap:anywhere}
 .study-card .collo{font-size:14.5px;line-height:1.65;color:var(--muted);text-align:left;margin-top:10px}
 .study-card .divider{height:1px;background:var(--line);margin:14px 0}
@@ -248,7 +256,7 @@ details.fold[open] > summary::before{transform:rotate(90deg)}
   .study-card .word{font-size:38px}
   .study-card .zh{font-size:19px}
   .study-card .zh-text{font-size:19px}
-  .study-card .zh-pos{min-width:40px}
+  .study-card .zh-rows.multi .zh-pos{min-width:24px}
 }
 .hint{color:var(--muted);font-size:13px;margin-top:8px}
 

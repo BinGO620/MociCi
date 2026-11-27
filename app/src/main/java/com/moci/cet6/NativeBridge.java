@@ -257,6 +257,24 @@ final class NativeBridge {
         http.getBase64(url, json -> activity.jsResolve(callbackId, json));
     }
 
+    /** Downloads audio straight to the cache; resolves with {ok, path, bytes}. */
+    @JavascriptInterface
+    public void audioFetch(String url, String key, String callbackId) {
+        http.fetchToFile(url, key, json -> activity.jsResolve(callbackId, json));
+    }
+
+    /** Path of an already-cached clip, or {ok:true, path:""} when absent. */
+    @JavascriptInterface
+    public String audioCachedPath(String key) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("path", http.cachedAudioPath(key));
+            return ok(o);
+        } catch (Throwable t) {
+            return err(String.valueOf(t.getMessage()));
+        }
+    }
+
     // ---------- misc ----------
 
     @JavascriptInterface

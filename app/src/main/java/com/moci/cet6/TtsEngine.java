@@ -36,6 +36,8 @@ final class TtsEngine {
     private volatile String lastError;
     private volatile String accent;
     private volatile boolean configured;
+    /** True once setLanguage() has been applied for the current accent. */
+    private volatile boolean localeApplied;
     private volatile String voiceName;
     private long uttSeq;
 
@@ -114,6 +116,7 @@ final class TtsEngine {
         if (tts != null) {
             try {
                 langStatus = tts.setLanguage(locale());
+                localeApplied = true;
                 pickBestVoice();
                 tts.setSpeechRate(rate());
             } catch (Throwable t) {
@@ -138,6 +141,7 @@ final class TtsEngine {
     private void init() {
         ready = false;
         configured = false;
+        localeApplied = false;
         langStatus = TextToSpeech.LANG_NOT_SUPPORTED;
         lastError = null;
         voiceName = null;
@@ -148,6 +152,7 @@ final class TtsEngine {
                     try {
                         // One-time configuration: language + voice + rate + pitch.
                         langStatus = tts.setLanguage(locale());
+                        localeApplied = true;
                         pickBestVoice();
                         tts.setSpeechRate(rate());
                         tts.setPitch(1.0f);
@@ -213,6 +218,7 @@ final class TtsEngine {
         if (tts == null) return false;
         try {
             langStatus = tts.setLanguage(locale());
+            localeApplied = true;
             return langStatus != TextToSpeech.LANG_MISSING_DATA
                 && langStatus != TextToSpeech.LANG_NOT_SUPPORTED;
         } catch (Throwable t) {
@@ -370,11 +376,19 @@ final class TtsEngine {
             return false;
         }
         try {
-            // Always stop first: fast card flipping must never stack audio.
-            tts.stop();
-            // Re-assert the locale on every attempt: a status cached at onInit can
-            // be stale (voice pack downloaded later, or engine reporting late).
-            langStatus = tts.setLanguage(locale());
+            // No tts.stop() here: the JS layer already stops before calling in,
+            // and a second flush immediately before speak() chops the attack off
+            // the utterance — one of the two causes of "it sounds stuttery".
+            // QUEUE_FLUSH below still guarantees the new line replaces the old.
+            //
+            // setLanguage() re-binds the engine's voice pipeline, so calling it on
+            // every utterance added a reconfiguration cost to each tap (the other
+            // cause). Apply it once per accent change, and only retry when the
+            // engine actually reported a negative status (stale cache case).
+            if (!localeApplied || langStatus < 0) {
+                langStatus = tts.setLanguage(locale());
+                localeApplied = true;
+            }
             tts.setSpeechRate(clampRate(rate));
             String id = "moci-" + (++uttSeq);
             int r = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);

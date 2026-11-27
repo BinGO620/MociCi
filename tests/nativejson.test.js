@@ -44,9 +44,9 @@ test('app: the prefetch cache lookup parses the bridge reply', () => {
     'no raw bridge result may be assigned and then inspected');
 });
 
-test('app: the online cache probe parses the bridge reply', () => {
-  const fn = APP.slice(APP.indexOf('function warmOnlineCache'), APP.indexOf('function prefetchedAudio'));
-  assert.ok(fn.includes('nativeParse('));
+test('app: the audio cache probe parses the bridge reply', () => {
+  const fn = APP.slice(APP.indexOf('function warmAudioCache'), APP.indexOf('function audioCacheKey'));
+  assert.ok(fn.includes('nativeParse('), 'a raw JSON string must never be read as an object');
 });
 
 test('app: speakSystem parses the ttsSpeak reply before judging success', () => {
@@ -55,14 +55,20 @@ test('app: speakSystem parses the ttsSpeak reply before judging success', () => 
   assert.ok(fn.includes('spoken === false'));
 });
 
-test('app: online cached audio is actually played on a hit', () => {
+test('app: cached human audio is played from a file path on a hit', () => {
   const start = APP.indexOf('function speak(text)');
-  const fn = APP.slice(start, APP.indexOf('function warmOnlineCache', start));
+  const fn = APP.slice(start, APP.indexOf('function warmAudioCache', start));
   assert.ok(fn.includes('prefetchedAudio(text)'), 'a cache hit must short-circuit before the engine');
+
   const prefetchStart = APP.indexOf('function prefetchedAudio');
-  const prefetchFn = APP.slice(prefetchStart, APP.indexOf('function onlineCacheKey', prefetchStart));
-  assert.ok(prefetchFn.includes('onlineCacheKey'), 'online blobs must be part of the cache lookup');
-  assert.ok(prefetchFn.includes('data:'), 'online blobs are data URLs ready for playback');
+  // Slice to the NEXT top-level declaration; audioCacheKey is first *called*
+  // earlier in the file, so searching for its name would cut in the wrong place.
+  const prefetchFn = APP.slice(prefetchStart, APP.indexOf('\n  function prefetchWord', prefetchStart));
+  // Clips are downloaded to disk and played via file://; routing the bytes back
+  // through JS as base64 + a data: URL was the slow path this replaced.
+  assert.ok(prefetchFn.includes('audioCachedPath'), 'the disk cache must be consulted');
+  assert.ok(prefetchFn.includes("'file://'"), 'cached clips play from a file URL');
+  assert.ok(!prefetchFn.includes('data:'), 'audio must not travel through the bridge as base64');
 });
 
 test('index.html loads nativejson before app.js', () => {

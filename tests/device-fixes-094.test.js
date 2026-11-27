@@ -83,7 +83,12 @@ test('study card: the old two-block layout is gone', () => {
 
 test('study card: POS gutter aligns rows', () => {
   assert.ok(/\.study-card \.zh-row\{[^}]*display:flex/.test(CSS), 'rows must be flex');
-  assert.ok(/\.study-card \.zh-pos\{[^}]*min-width/.test(CSS), 'POS gutter needs a fixed width to align');
+  // A fixed gutter is only right for multi-sense words. Single-sense rows let the
+  // POS sit flush, otherwise the reserved width reads as a hole on the card.
+  assert.ok(/\.study-card \.zh-rows\.multi \.zh-pos\{[^}]*min-width/.test(CSS),
+    'multi-sense rows need a gutter to align');
+  assert.ok(/\.study-card \.zh-rows\.single \.zh-pos\{[^}]*min-width:0/.test(CSS),
+    'single-sense rows must not reserve spacer width');
   assert.ok(/\.study-card \.zh-text\{[^}]*font-size:21px/.test(CSS), 'meaning text must keep the large size');
 });
 
@@ -156,11 +161,13 @@ test('api: the default model is one this gateway actually serves', () => {
 
 /* ------------------------------------------------------------- 5. online TTS */
 
-test('online tts: the field explains what it needs and how it behaves', () => {
-  assert.ok(/\{text\} 占位/.test(APP), 'the placeholder must be documented');
-  assert.ok(/mp3\/wav/.test(APP), 'the response format must be stated');
+test('pronunciation: the source explains what it needs and how it behaves', () => {
+  assert.ok(/\{text\}/.test(APP), 'the placeholder must be documented');
+  assert.ok(/真人发音/.test(APP), 'the default human-audio source must be named');
   assert.ok(/后台下载/.test(APP), 'the cache-then-play behaviour must be described accurately');
-  assert.ok(/不会报错或中断学习/.test(APP), 'the fallback must be stated');
+  assert.ok(/断网也能用/.test(APP), 'offline playback after the first listen must be stated');
+  assert.ok(/不会报错/.test(APP), 'the silent fallback must be stated');
+  assert.ok(/发送到在线发音服务/.test(APP), 'sending the word off-device must be disclosed');
 });
 
 test('online tts: a template without {text} is rejected', () => {

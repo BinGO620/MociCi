@@ -79,6 +79,9 @@ function bootApp(opts) {
     vm.runInContext(fs.readFileSync(path.join(base, 'js', f + '.js'), 'utf8'), sandbox, { filename: f + '.js' });
   });
   vm.runInContext(fs.readFileSync(path.join(base, 'android-bridge.js'), 'utf8'), sandbox, { filename: 'android-bridge.js' });
+  // Async native replies (audioFetch & friends) reach JS through the callback id,
+  // exactly as @JavascriptInterface does on device.
+  sim.setResolver((id, json) => sandbox.__mociResolve(id, json));
   vm.runInContext(fs.readFileSync(path.join(base, 'app.js'), 'utf8'), sandbox, { filename: 'app.js' });
 
   return { sim, sandbox, Moci: sandbox.Moci, app: sandbox.MociApp };

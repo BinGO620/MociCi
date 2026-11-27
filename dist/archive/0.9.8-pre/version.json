@@ -1,0 +1,10 @@
+{
+  "versionCode": 9,
+  "versionName": "0.9.8-pre",
+  "stage": "pre-release",
+  "notes": "发音重构：默认真人发音（首次听即缓存、之后离线可用）；修复系统 TTS 每次重配引擎与重复停止；词性留白收窄。",
+  "deviceTested": {
+    "date": "2026-11-27",
+    "result": "真人发音音源已在命令行验证可用；流畅度与音质提升需真机试听确认"
+  }
+}

@@ -29,19 +29,37 @@
   function wrap(prefix, invoke) {
     return new Promise(function (resolve) {
       var c = callback(prefix);
-      pending[c.id] = resolve;
+      // The timeout must be cleared once the call resolves. Leaving it armed kept
+      // a 130-second timer alive per request: wasteful on device, and in tests it
+      // held the process open long after every assertion had passed.
+      //
+      // Arm the timer BEFORE invoking: @JavascriptInterface callbacks can resolve
+      // synchronously, and if the timer were installed afterwards the completion
+      // would have nothing to clear and the timer would outlive the request.
+      var done = false;
+      var settle = function (result) {
+        if (done) return;
+        done = true;
+        if (timer !== null) { clearTimeout(timer); timer = null; }
+        resolve(result);
+      };
+      var timer = setTimeout(function () {
+        timer = null;
+        if (!done) {
+          delete pending[c.id];
+          settle({ ok: false, error: 'timeout' });
+        }
+      }, 130000);
+
+      pending[c.id] = function (result) {
+        settle(result);
+      };
       try {
         invoke(c.id);
       } catch (e) {
         delete pending[c.id];
-        resolve({ ok: false, error: String(e && e.message ? e.message : e) });
+        settle({ ok: false, error: String(e && e.message ? e.message : e) });
       }
-      setTimeout(function () {
-        if (pending[c.id]) {
-          delete pending[c.id];
-          resolve({ ok: false, error: 'timeout' });
-        }
-      }, 130000);
     });
   }
 
@@ -71,6 +89,11 @@
     httpGetBase64: function (url) {
       return wrap('get', function (id) { root.MociNative.httpGetBase64(url, id); });
     },
+    // Native-side download straight to disk: resolves {ok, path, bytes, mime}.
+    audioFetch: function (url, key) {
+      return wrap('aud', function (id) { root.MociNative.audioFetch(url, key, id); });
+    },
+    audioCachedPath: function (key) { return root.MociNative.audioCachedPath(key); },
     pickFile: function () { return wrap('pick', function (id) { root.MociNative.pickFile(id); }); },
     pickImage: function () { return wrap('img', function (id) { root.MociNative.pickImage(id); }); },
     camera: function () { return wrap('cam', function (id) { root.MociNative.camera(id); }); },

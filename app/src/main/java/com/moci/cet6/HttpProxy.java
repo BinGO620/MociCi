@@ -17,9 +17,11 @@ final class HttpProxy {
     private final Prefs prefs;
     private final ExecutorService pool = Executors.newFixedThreadPool(2);
     private final ExecutorService audioPool = Executors.newFixedThreadPool(2);
+    private final java.io.File audioDir;
 
     HttpProxy(android.content.Context ctx, Prefs prefs) {
         this.prefs = prefs;
+        this.audioDir = new java.io.File(ctx.getCacheDir(), "audio");
     }
 
     interface Callback {
@@ -126,6 +128,88 @@ final class HttpProxy {
             }
             cb.done(result);
         });
+    }
+
+    /**
+     * Downloads audio straight to the cache and reports only the path.
+     *
+     * The generic getBase64 path sends the whole clip through the JS bridge twice
+     * (download → base64 → JS → writeBase64 → disk) and then plays it from a
+     * data: URL, which is both slow and memory-hungry for a 30KB clip and worse
+     * for anything larger. Writing the file natively and handing back a path lets
+     * playback use a plain file:// URL, which is the same fast path the
+     * system-TTS cache already uses.
+     */
+    void fetchToFile(String url, String key, Callback cb) {
+        audioPool.execute(() -> {
+            String result;
+            HttpURLConnection conn = null;
+            try {
+                if (!allowed(url)) throw new Exception("仅允许 HTTPS 请求（可在设置中为自建服务开启 HTTP）");
+                if (key == null || key.isEmpty()) throw new Exception("empty key");
+                if (!audioDir.exists() && !audioDir.mkdirs()) throw new Exception("no cache dir");
+
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(12_000);
+                conn.setReadTimeout(30_000);
+                conn.setRequestProperty("Accept", "audio/*");
+                int code = conn.getResponseCode();
+                if (code < 200 || code >= 300) throw new Exception("HTTP " + code);
+
+                InputStream in = conn.getInputStream();
+                byte[] bytes;
+                try {
+                    bytes = readBytes(in, 6 * 1024 * 1024);
+                } finally {
+                    in.close();
+                }
+                // A 200 with an empty body means the provider had nothing for this
+                // text (observed on the pronunciation service for blank input).
+                // Caching that would poison every later playback, so it is a failure.
+                if (bytes.length == 0) throw new Exception("音频为空");
+
+                java.io.File f = new java.io.File(audioDir, fileNameFor(key));
+                java.io.File tmp = new java.io.File(audioDir, fileNameFor(key) + ".tmp");
+                java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
+                try {
+                    out.write(bytes);
+                    out.flush();
+                    out.getFD().sync();
+                } finally {
+                    out.close();
+                }
+                if (f.exists() && !f.delete()) { /* best effort */ }
+                if (!tmp.renameTo(f)) {
+                    throw new Exception("缓存写入失败");
+                }
+                String mime = conn.getContentType();
+                result = "{\"ok\":true,\"path\":" + org.json.JSONObject.quote(f.getAbsolutePath())
+                        + ",\"bytes\":" + bytes.length
+                        + ",\"mime\":" + org.json.JSONObject.quote(mime == null ? "audio/mpeg" : mime) + "}";
+            } catch (Throwable t) {
+                result = errorJson(t);
+            } finally {
+                if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
+            }
+            cb.done(result);
+        });
+    }
+
+    /** Path of an already-cached clip, or "" when nothing was fetched yet. */
+    String cachedAudioPath(String key) {
+        try {
+            if (key == null || key.isEmpty()) return "";
+            java.io.File f = new java.io.File(audioDir, fileNameFor(key));
+            return f.exists() && f.length() > 0 ? f.getAbsolutePath() : "";
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** Stable, filesystem-safe name derived from the caller's cache key. */
+    private static String fileNameFor(String key) {
+        return "a-" + Integer.toHexString(key.hashCode()) + "-" + Math.abs(key.length()) + ".bin";
     }
 
     private static String safeHeader(HttpURLConnection conn, String name) {

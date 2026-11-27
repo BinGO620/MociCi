@@ -39,7 +39,8 @@
     // the Java side declares a primitive float, which rejects undefined.
     speechAccent: 'us',
     autoSpeak: true,
-    voiceSource: 'system',
+    // 'human' = recorded audio fetched once and cached; 'system' = device TTS.
+    voiceSource: 'human',
     onlineTts: '',
     ttsIssueNotified: false,
     // Which dictation question was auto-spoken last, so a re-render of the same
@@ -143,6 +144,17 @@
    *   2. the system TTS engine (warmed up in MainActivity.onCreate)
    *   3. online TTS only as a background cache-filler, never as a blocking wait
    */
+  /**
+   * Pronunciation, in priority order:
+   *   1. a cached clip on disk (recorded human audio, fetched once per word)
+   *   2. the system TTS engine (always available, never blocks)
+   *   3. online fetch fills the cache in the background for next time
+   *
+   * The human-audio layer is what makes speech sound natural: the device's only
+   * speech engine is a basic formant synthesiser, and no amount of tuning makes
+   * it pleasant. Fetching once and caching keeps the app offline-capable — after
+   * the first listen a word plays without any network.
+   */
   function speak(text) {
     if (!text) return;
     stopSpeaking();
@@ -151,61 +163,83 @@
       playUrl(cached.src);
       return;
     }
+    // Not cached yet: speak now so the tap is never silent, and warm the clip.
     speakSystem(text);
-    warmOnlineCache(text);
+    warmAudioCache(text);
+  }
+
+  /** Where human audio comes from. Youdao serves recorded audio, no key needed. */
+  function audioSourceUrl(text) {
+    var custom = state.onlineTts;
+    if (custom) {
+      return custom.replace('{text}', encodeURIComponent(text))
+        .replace('{accent}', state.speechAccent === 'uk' ? 'uk' : 'us');
+    }
+    // type=2 is US, type=1 is UK.
+    return 'https://dict.youdao.com/dictvoice?audio=' + encodeURIComponent(text) +
+      '&type=' + (state.speechAccent === 'uk' ? '1' : '2');
+  }
+
+  /** True when human audio should be used at all. */
+  function wantsHumanAudio() {
+    return state.voiceSource !== 'system' && !!(native && bridge);
   }
 
   /**
-   * Online TTS is never awaited. A cache miss speaks the system voice
-   * immediately and refreshes the cache in the background for next time.
+   * Downloads and caches one clip. Cached by text + accent, so switching accent
+   * does not silently replay the other one.
    */
-  function warmOnlineCache(text) {
-    if (state.voiceSource !== 'online' || !state.onlineTts || !native || !bridge) return;
-    var key = onlineCacheKey(text);
+  function warmAudioCache(text) {
+    if (!text || !wantsHumanAudio()) return;
+    var key = audioCacheKey(text);
     try {
-      var have = nativeParse(root.MociNative.readBase64(key), null);
-      if (have && have.ok && have.base64) return;
-    } catch (e) { /* cache probe is best-effort */ }
-    var url = state.onlineTts.replace('{text}', encodeURIComponent(text));
-    bridge.httpGetBase64(url).then(function (r) {
-      if (!r || !r.ok || !r.base64) return;
-      try {
-        root.MociNative.writeBase64(key, r.base64);
-        root.MociNative.prefSet('onlineMime:' + key, r.mime || 'audio/mpeg');
-      } catch (e) { /* filling the cache is optional */ }
-    });
+      var have = nativeParse(root.MociNative.audioCachedPath(key), null);
+      if (have && have.ok && have.path) return; // already on disk
+    } catch (e) { }
+    try {
+      bridge.audioFetch(audioSourceUrl(text), key).then(function (r) {
+        // A failed fetch is silent by design: the system voice already spoke and
+        // the next attempt will simply try again.
+        return r;
+      });
+    } catch (e) { /* never let audio break the UI */ }
+  }
+
+  function audioCacheKey(text) {
+    var accent = state.speechAccent === 'uk' ? 'uk' : 'us';
+    return 'audio/' + accent + '/' + String(text || '').toLowerCase().replace(/[^a-z0-9']+/g, '_');
   }
 
   function prefetchedAudio(text) {
     if (!native || !bridge) return null;
+    // Human audio first — it is the whole point of the mode.
+    if (wantsHumanAudio()) {
+      try {
+        var h = nativeParse(root.MociNative.audioCachedPath(audioCacheKey(text)), null);
+        if (h && h.ok && h.path) return { src: 'file://' + h.path, kind: 'human' };
+      } catch (e) { }
+      return null;
+    }
     try {
       var r = nativeParse(root.MociNative.ttsCachedPath(text), null);
       if (r && r.ok && r.path) {
         return { src: 'file://' + r.path, kind: 'file' };
       }
     } catch (e) { }
-    // Fall back to an online-cached blob (data URL) when one was filled earlier.
-    if (state.voiceSource === 'online' && state.onlineTts) {
-      var key = onlineCacheKey(text);
-      try {
-        var blob = nativeParse(root.MociNative.readBase64(key), null);
-        if (blob && blob.ok && blob.base64) {
-          var mime = 'audio/mpeg';
-          mime = getPref('onlineMime:' + key, mime);
-          return { src: 'data:' + mime + ';base64,' + blob.base64, kind: 'online' };
-        }
-      } catch (e3) { }
-    }
     return null;
   }
 
-  function onlineCacheKey(text) {
-    return 'online/' + String(text || '').toLowerCase().replace(/[^a-z0-9']/g, '_') + '.bin';
-  }
-
-  /** Asks the native layer to pre-synthesise a word so the next tap is a cache hit. */
+  /**
+   * Warms whatever the current source will need for this text: the human clip
+   * when that mode is on, otherwise the system engine's own cache. Both are
+   * keyed the same way the playback path looks them up, so a hit is guaranteed.
+   */
   function prefetchWord(text) {
     if (!text || !native || !bridge) return;
+    if (wantsHumanAudio()) {
+      warmAudioCache(text);
+      return;
+    }
     try { root.MociNative.ttsPrefetch(text); } catch (e) { }
   }
 
@@ -337,7 +371,7 @@
     state.settings = store.loadSettings();
     state.speechRate = Number(state.settings.speechRate) || 1.0;
     state.autoSpeak = state.settings.autoSpeak !== false;
-    state.voiceSource = state.settings.voiceSource || 'system';
+    state.voiceSource = state.settings.voiceSource || 'human';
     state.onlineTts = state.settings.onlineTts || '';
     state.speechAccent = state.settings.ttsAccent === 'uk' ? 'uk' : 'us';
     var dark = null;
@@ -1135,7 +1169,9 @@
     }
     groups = groups.filter(function (g) { return (g.items && g.items.length) || g.pos; });
 
-    var block = el('div', { class: 'zh-rows' });
+    // One sense needs no alignment gutter; several do. See style.css for why a
+    // reserved gutter on a single-sense card reads as a hole.
+    var block = el('div', { class: 'zh-rows ' + (groups.length > 1 ? 'multi' : 'single') });
     if (!groups.length) {
       block.appendChild(el('div', { class: 'zh-row' }, [
         entryPos ? el('span', { class: 'zh-pos', text: entryPos }) : null,
@@ -2336,8 +2372,8 @@
     auto.addEventListener('change', function () { saveSettings({ autoSpeak: auto.checked }); });
     var online = el('input', { class: 'input', value: state.onlineTts, placeholder: 'https://example.com/tts?q={text}' });
     var voiceSource = el('div', { class: 'chips' }, [
-      el('button', { class: 'chip' + (state.voiceSource === 'system' ? ' on' : ''), text: '系统 TTS', onclick: function () { saveSettings({ voiceSource: 'system' }); render(); } }),
-      el('button', { class: 'chip' + (state.voiceSource === 'online' ? ' on' : ''), text: '在线 TTS（默认关）', onclick: function () { saveSettings({ voiceSource: 'online' }); render(); } })
+      el('button', { class: 'chip' + (state.voiceSource !== 'system' ? ' on' : ''), text: '真人发音（默认）', onclick: function () { saveSettings({ voiceSource: 'human' }); render(); } }),
+      el('button', { class: 'chip' + (state.voiceSource === 'system' ? ' on' : ''), text: '系统 TTS', onclick: function () { saveSettings({ voiceSource: 'system' }); render(); } })
     ]);
     var voiceCard = el('div', { class: 'card pad' }, [
       el('div', { style: 'font-weight:650', text: '发音' }),
@@ -2370,20 +2406,21 @@
       ]),
       el('label', { class: 'field' }, [el('span', { text: '语速 ' + state.speechRate }), rate]),
       el('label', { class: 'checkline' }, [auto, el('div', { class: 'body' }, [el('div', { class: 'small', text: '学习卡翻面自动发音' })])]),
-      el('label', { class: 'field' }, [el('span', { text: '在线 TTS URL 模板（含 {text}）' }), online]),
+      el('label', { class: 'field' }, [el('span', { text: '自定义发音接口（可选，含 {text} / {accent}）' }), online]),
       el('div', { class: 'tiny muted', style: 'margin-top:4px', text:
-        '填你自己（或第三方）的 TTS 接口地址，用 {text} 占位要朗读的内容。例如：' +
-        'https://your-tts.example.com/speak?q={text}' }),
+        '默认使用在线真人发音，无需配置。若要换成自建接口，填地址即可，' +
+        '支持 {text}（要读的内容）与 {accent}（us / uk）占位符。' }),
       el('div', { class: 'tiny muted', text:
-        '工作方式：选中「在线 TTS」后，第一次听到单词时仍用系统语音，同时后台下载该词的音频并缓存；' +
-        '之后同一单词直接播放缓存，速度更快。下载失败会自动继续用系统语音，不会报错或中断学习。' }),
-      el('div', { class: 'tiny muted', text:
-        '你需要提供：一个能按 URL 返回音频文件（mp3/wav）的接口。没有的话请保持「系统 TTS」。' }),
-      el('button', { class: 'btn ghost sm', text: '保存在线 TTS', onclick: function () {
+        '工作方式：第一次听到某个词时用系统语音先出声，同时后台下载该词的真人录音并缓存；' +
+        '之后同一个词直接播放本地录音，断网也能用。下载失败不会报错，继续用系统语音。' }),
+      el('div', { class: 'tiny', style: 'color:var(--muted)', text:
+        '说明：真人发音会把单词文本发送到在线发音服务以取得音频；若你希望完全不发网络请求，' +
+        '请选「系统 TTS」。' }),
+      el('button', { class: 'btn ghost sm', text: '保存发音接口', onclick: function () {
         var v = online.value.trim();
         if (v && v.indexOf('{text}') < 0) { showError('URL 模板必须包含 {text} 占位符'); return; }
         saveSettings({ onlineTts: v });
-        toast(v ? '已保存在线 TTS 地址' : '已清空在线 TTS 地址');
+        toast(v ? '已保存自定义发音接口' : '已恢复使用默认真人发音');
       } })
     ]);
     screen.appendChild(voiceCard);
