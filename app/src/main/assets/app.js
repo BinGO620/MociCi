@@ -11,6 +11,7 @@
   var storeMod = root.Moci.store;
   var storage = root.Moci.storage;
   var appmeta = root.Moci.appmeta;
+  var meaning = root.Moci.meaning;
   var nativeParse = root.Moci.nativejson
     ? root.Moci.nativejson.parse
     : function (raw, fb) {
@@ -209,7 +210,8 @@
     if (native && bridge) {
       try {
         var r = nativeParse(bridge.ttsSpeak(text, state.speechRate), null);
-        if (r && r.ok && r.spoken === false) ttsUnavailable();
+        if (r && !r.ok) { showError('发音失败：' + (r.error || '未知错误')); return; }
+        if (r && r.ok && r.spoken === false) ttsUnavailable(r);
         return;
       } catch (e) { }
     }
@@ -248,10 +250,22 @@
     try { if (root.speechSynthesis) root.speechSynthesis.cancel(); } catch (e) { }
   }
 
-  function ttsUnavailable() {
+  function ttsUnavailable(r) {
     if (state.ttsIssueNotified) return;
     state.ttsIssueNotified = true;
-    toast('当前设备的英语发音不可用，可在设置里更换 TTS 引擎');
+    var detail = '';
+    if (r && r.error) {
+      detail = String(r.error);
+    } else {
+      try {
+        var st = nativeParse(root.MociNative.ttsStatus(), null) || {};
+        if (st.error) detail = st.error;
+        else if (st.ready) detail = '语言未就绪 (langStatus=' + st.langStatus + ')';
+        else detail = '引擎未初始化 (langStatus=' + st.langStatus + ')';
+      } catch (e) { }
+    }
+    showError('发音失败：' + (detail || '系统的英语语音不可用') +
+      '。可在设置页点「打开系统 TTS 设置」安装英语语音数据，或换一个 TTS 引擎。');
   }
 
   /**
@@ -1052,6 +1066,48 @@
     if (state.autoSpeak) setTimeout(function () { speak(cards[0].en); }, 240);
   }
 
+  /**
+   * Renders meanings as one line per part of speech:
+   *
+   *   v.  有益于
+   *   n.  益处
+   *
+   * The stored `zh` string keeps inline markers ("有益于 n. 益处"), so printing
+   * it directly next to a separate `pos` line made the marker of the SECOND
+   * sense appear on the FIRST sense's line. Parsing through the meaning module
+   * keeps every sense with its own marker, and a sense whose POS matches the
+   * entry line simply inherits it instead of repeating.
+   */
+  function appendMeaningBlock(container, pos, zh) {
+    var entryPos = String(pos == null ? '' : pos).trim();
+    var groups = [];
+    try {
+      // Passing the entry-line POS as the base lets the parser strip a leading
+      // marker that merely repeats it ("v." + "v. 有益于" must not render twice)
+      // while keeping every genuinely different sense marker intact.
+      groups = meaning.parseSegments(zh, entryPos) || [];
+    } catch (e) {
+      groups = [];
+    }
+    groups = groups.filter(function (g) { return (g.items && g.items.length) || g.pos; });
+
+    var block = el('div', { class: 'zh-rows' });
+    if (!groups.length) {
+      block.appendChild(el('div', { class: 'zh-row' }, [
+        entryPos ? el('span', { class: 'zh-pos', text: entryPos }) : null,
+        el('span', { class: 'zh-text', text: '（无释义，仅凭发音记忆）' })
+      ]));
+    } else {
+      groups.forEach(function (g) {
+        block.appendChild(el('div', { class: 'zh-row' }, [
+          g.pos ? el('span', { class: 'zh-pos', text: g.pos }) : null,
+          el('span', { class: 'zh-text', text: (g.items || []).join('；') })
+        ]));
+      });
+    }
+    container.appendChild(block);
+  }
+
   function screenStudy() {
     var s = state.session;
     var screen = el('div', { class: 'screen narrow' });
@@ -1077,8 +1133,11 @@
 
     if (s.flipped) {
       cardEl.appendChild(el('div', { class: 'divider' }));
-      if (card.pos) cardEl.appendChild(el('div', { class: 'pos', text: card.pos }));
-      cardEl.appendChild(el('div', { class: 'zh', text: card.zh || '（无释义，仅凭发音记忆）' }));
+      // Meanings are grouped by part of speech and rendered on their own line.
+      // The old layout printed card.pos on a separate line and card.zh verbatim
+      // below it, so "v." stood alone while the noun sense ("n. 益处") stayed
+      // glued to the verb line — the two never lined up.
+      appendMeaningBlock(cardEl, card.pos, card.zh);
       if (card.collo.length) {
         var list = el('div', { class: 'collo' });
         card.collo.forEach(function (c) {
@@ -1435,10 +1494,9 @@
   }
 
   function gradeHandwriting(s, base64) {
-    var key = '';
     var key = getPref('apiKey', '');
     var baseUrl = getPref('baseUrl', 'https://llm.ujn.edu.cn/v1');
-    var model = getPref('model', 'Qwen3.8-Flash-Next');
+    var model = getPref('model', 'deepseek-v41-flash');
     if (!key) { toast('请先在设置里配置 API Key'); return; }
     var items = s.questions.map(function (q) { return { type: q.type, answer: q.answer, prompt: q.prompt }; });
     var prompt = appmeta.buildGradingPrompt(items);
@@ -1452,7 +1510,10 @@
         ]
       }],
       temperature: 0.1,
-      reasoning_effort: 'none'
+      // Grading emits a JSON array for every question. Without an explicit budget
+      // reasoning models spend the default allowance on thinking and return
+      // truncated (unparseable) JSON, so state a budget large enough for both.
+      max_tokens: 8192
     });
     toast('正在批改…');
     bridge.httpPost(baseUrl.replace(/\/+$/, '') + '/chat/completions', body).then(function (r) {
@@ -1965,13 +2026,17 @@
     screen.appendChild(probeBox);
     store.adapter.selfTest ? (function () {
       var r = store.adapter.selfTest();
-      var allOk = r.writeText && r.readText && r.delete && r.stat && r.list;
-      probeBox.style.background = allOk ? 'var(--ok-soft)' : 'var(--danger-soft)';
-      probeBox.style.borderColor = allOk ? 'var(--ok)' : 'var(--danger)';
+      // Writing is what decides whether an import survives; a failing list()
+      // only affects backup enumeration and must not claim writes are broken.
+      var writeOk = r.writeText && r.readText;
+      var allOk = writeOk && r.delete && r.stat && r.list;
+      probeBox.style.background = allOk ? 'var(--ok-soft)' : (writeOk ? 'var(--warn-soft)' : 'var(--danger-soft)');
+      probeBox.style.borderColor = allOk ? 'var(--ok)' : (writeOk ? 'var(--warn)' : 'var(--danger)');
       clear(probeBox);
       probeBox.appendChild(el('div', {
-        style: 'font-weight:650;color:' + (allOk ? 'var(--ok)' : 'var(--danger)'),
-        text: allOk ? '✅ 存储读写正常（写入能真正落盘）' : '❌ 存储写入失败，导入不会保存'
+        style: 'font-weight:650;color:' + (allOk ? 'var(--ok)' : (writeOk ? 'var(--warn)' : 'var(--danger)')),
+        text: allOk ? '✅ 存储读写正常（写入能真正落盘）'
+          : (writeOk ? '⚠️ 写入正常，但部分读取功能异常（导入仍可保存）' : '❌ 存储写入失败，导入不会保存')
       }));
       probeBox.appendChild(el('div', { class: 'tiny', style: 'margin-top:4px;color:var(--muted)',
         text: 'write ' + (r.writeText ? '✓' : '✗') + ' · read ' + (r.readText ? '✓' : '✗') +
@@ -2121,9 +2186,18 @@
     });
     var model = el('input', {
       class: 'input', value: savedModel,
-      placeholder: 'gpt-4o-mini 或 Qwen3.8-Flash-Next'
+      placeholder: 'deepseek-v41-flash 或 Qwen3.8-Flash-Next'
     });
     var apiKey = el('input', { class: 'input', type: 'password', value: getPref('apiKey', ''), placeholder: 'sk-... 只保存在本机' });
+    var keyVisible = false;
+    var eye = el('button', {
+      class: 'btn ghost sm', type: 'button', text: '👁 显示', style: 'flex:0 0 auto',
+      onclick: function () {
+        keyVisible = !keyVisible;
+        apiKey.type = keyVisible ? 'text' : 'password';
+        eye.textContent = keyVisible ? '🙈 隐藏' : '👁 显示';
+      }
+    });
     var insecure = el('input', { type: 'checkbox', checked: getPrefBool('allowInsecureHttp', false) });
     var configured = !!(savedBase && savedModel && getPref('apiKey', ''));
     var aiCard = el('div', { class: 'card pad' }, [
@@ -2132,6 +2206,7 @@
       el('label', { class: 'field' }, [el('span', { text: '网关地址 BASE_URL' }), baseUrl]),
       el('label', { class: 'field' }, [el('span', { text: '模型' }), model]),
       el('label', { class: 'field' }, [el('span', { text: 'API Key' }), apiKey]),
+      el('div', { class: 'row', style: 'margin-top:6px;gap:8px' }, [eye]),
       el('label', { class: 'checkline' }, [insecure, el('div', { class: 'body' }, [el('div', { class: 'small', text: '允许 HTTP（不安全）' })])]),
       el('div', { class: 'btn-row', style: 'margin-top:8px' }, [
         el('button', { class: 'btn soft sm', text: '保存', onclick: function () {
@@ -2210,10 +2285,14 @@
         class: 'tiny',
         style: 'margin-top:4px;color:' + (!ttsStatus.ready ? 'var(--danger)' : (ttsStatus.english ? 'var(--ok)' : 'var(--warn)')),
         text: !ttsStatus.ready
-          ? '语音引擎启动失败。点「试听」可重试，或更换引擎'
+          ? '语音引擎启动失败。点「试听」会重试一次；仍无声请点「打开系统 TTS 设置」安装英语语音数据'
           : (ttsStatus.english
             ? '英语语音已就绪（按「试听」确认真实出声）'
             : '引擎未明确报告英语支持，但通常仍可发音。点「试听」验证')
+      }) : null,
+      ttsStatus && !ttsStatus.ready && engines.length === 0 ? el('div', {
+        class: 'tiny', style: 'margin-top:2px;color:var(--danger)',
+        text: '未检测到任何 TTS 引擎。请先安装系统语音服务（如 Google 文字转语音 / 手机自带语音引擎）'
       }) : null,
       el('div', { class: 'small muted', style: 'margin-top:10px', text: '发音来源' }),
       voiceSource,
@@ -2223,6 +2302,7 @@
       accentChips,
       el('div', { class: 'btn-row', style: 'margin-top:6px' }, [
         el('button', { class: 'btn ghost sm', text: '试听', onclick: function () { speak('abandon'); } }),
+        el('button', { class: 'btn ghost sm', text: '发音诊断', onclick: function () { showTtsDiagnostics(); } }),
         el('button', { class: 'btn ghost sm', text: '打开系统 TTS 设置', onclick: function () {
           if (native) { try { root.MociNative.ttsOpenSettings(); } catch (e) { } }
           else toast('仅 App 内可用');
@@ -2231,9 +2311,19 @@
       el('label', { class: 'field' }, [el('span', { text: '语速 ' + state.speechRate }), rate]),
       el('label', { class: 'checkline' }, [auto, el('div', { class: 'body' }, [el('div', { class: 'small', text: '学习卡翻面自动发音' })])]),
       el('label', { class: 'field' }, [el('span', { text: '在线 TTS URL 模板（含 {text}）' }), online]),
+      el('div', { class: 'tiny muted', style: 'margin-top:4px', text:
+        '填你自己（或第三方）的 TTS 接口地址，用 {text} 占位要朗读的内容。例如：' +
+        'https://your-tts.example.com/speak?q={text}' }),
+      el('div', { class: 'tiny muted', text:
+        '工作方式：选中「在线 TTS」后，第一次听到单词时仍用系统语音，同时后台下载该词的音频并缓存；' +
+        '之后同一单词直接播放缓存，速度更快。下载失败会自动继续用系统语音，不会报错或中断学习。' }),
+      el('div', { class: 'tiny muted', text:
+        '你需要提供：一个能按 URL 返回音频文件（mp3/wav）的接口。没有的话请保持「系统 TTS」。' }),
       el('button', { class: 'btn ghost sm', text: '保存在线 TTS', onclick: function () {
-        saveSettings({ onlineTts: online.value.trim() });
-        toast('已保存');
+        var v = online.value.trim();
+        if (v && v.indexOf('{text}') < 0) { showError('URL 模板必须包含 {text} 占位符'); return; }
+        saveSettings({ onlineTts: v });
+        toast(v ? '已保存在线 TTS 地址' : '已清空在线 TTS 地址');
       } })
     ]);
     screen.appendChild(voiceCard);
@@ -2304,23 +2394,89 @@
     ]);
   }
 
+  /**
+   * Reports what the engine actually says, instead of leaving the user to guess
+   * why nothing is audible. Attempts a real utterance so a stale status code
+   * cannot masquerade as a working setup.
+   */
+  function showTtsDiagnostics() {
+    if (!native || !bridge) { toast('浏览器调试请用系统语音'); return; }
+    var st = {};
+    var engines = [];
+    var speakResult = null;
+    try { st = nativeParse(root.MociNative.ttsStatus(), {}) || {}; } catch (e) { st = { error: String(e.message || e) }; }
+    try {
+      var eo = nativeParse(root.MociNative.ttsEngines(), null);
+      engines = (eo && eo.items) || [];
+    } catch (e) { }
+    try { speakResult = nativeParse(bridge.ttsSpeak('test', state.speechRate), null); } catch (e2) {
+      speakResult = { ok: false, error: String(e2.message || e2) };
+    }
+
+    var langName = { '-1': 'LANG_MISSING_DATA（缺少语音数据）', '-2': 'LANG_NOT_SUPPORTED（不支持该语言）' };
+    var rows = [
+      ['引擎已初始化', st.ready ? '是' : '否'],
+      ['语言状态', langName[String(st.langStatus)] || ('正常 (' + st.langStatus + ')')],
+      ['当前引擎', st.engine ? st.engine : '系统默认'],
+      ['系统默认引擎', st.defaultEngine || '未知'],
+      ['可用引擎数', engines.length + ' 个'],
+      ['最近错误', st.error || '无'],
+      ['试朗读', (speakResult && speakResult.ok)
+        ? (speakResult.spoken === false ? '调用了但未发声' : '已提交给引擎')
+        : ('失败：' + ((speakResult && speakResult.error) || '未知'))],
+      ['Android 版本', 'API ' + (st.sdk || '?')]
+    ];
+
+    var body = el('div', {});
+    rows.forEach(function (r) {
+      body.appendChild(el('div', { class: 'checkline' }, [
+        el('div', { class: 'grow small muted', text: r[0] }),
+        el('div', { class: 'small', style: 'text-align:right;max-width:60%;word-break:break-all', text: String(r[1]) })
+      ]));
+    });
+    if (!engines.length) {
+      body.appendChild(el('div', { class: 'tiny', style: 'color:var(--danger);margin-top:8px', text:
+        '未检测到任何 TTS 引擎。请到系统设置 → 无障碍/文字转语音 安装一个语音引擎（如 Google 文字转语音）。' }));
+    } else if (!st.ready) {
+      body.appendChild(el('div', { class: 'tiny', style: 'color:var(--danger);margin-top:8px', text:
+        '引擎存在但初始化失败。常见原因：语音数据未下载、引擎被系统休眠、或该引擎不支持英语。' }));
+    }
+    openSheet('发音诊断', body, [
+      el('button', { class: 'btn ghost', text: '关闭', onclick: closeSheet }),
+      el('button', { class: 'btn', text: '复制结果', onclick: function () {
+        copy(rows.map(function (r) { return r[0] + ': ' + r[1]; }).join('\n'));
+        toast('已复制');
+      } })
+    ]);
+  }
+
   function testConnection() {
     if (!native || !bridge) { toast('浏览器调试请直接在终端测试'); return; }
     var key = getPref('apiKey', '');
     if (!key) { toast('先保存 API Key'); return; }
     var base = getPref('baseUrl', 'https://llm.ujn.edu.cn/v1').replace(/\/+$/, '');
-    var model = getPref('model', 'Qwen3.8-Flash-Next');
+    var model = getPref('model', 'deepseek-v41-flash');
     toast('正在测试…');
+    // Reasoning models spend tokens thinking BEFORE emitting any content. A tiny
+    // budget (8) is exhausted by the reasoning pass, which the gateway reports as
+    // "思考过程耗尽了全部输出预算" — or, on some models, hangs until the timeout.
+    // Give the probe enough room to finish thinking and answer.
     bridge.httpPost(base + '/chat/completions', JSON.stringify({
       model: model,
-      messages: [{ role: 'user', content: 'ping' }],
-      max_tokens: 8,
-      temperature: 0,
-      reasoning_effort: 'none'
+      messages: [{ role: 'user', content: '回复 OK' }],
+      max_tokens: 2048,
+      temperature: 0
     })).then(function (r) {
       if (r && r.ok) { toast('连接成功'); return; }
       var msg = (r && r.error) || ('HTTP ' + (r && r.status));
-      showError('测试失败：' + msg);
+      var detail = '';
+      try {
+        var body = JSON.parse(r.body || '{}');
+        if (body.error && body.error.message) detail = body.error.message;
+      } catch (e) { }
+      if (detail) msg = detail;
+      // 404/400 usually means the model id does not exist on this gateway.
+      showError('测试失败：' + msg + '（模型：' + model + '）');
     });
   }
 
@@ -2404,6 +2560,9 @@
     navigate: navigate,
     render: render,
     speak: speak,
-    copy: copy
+    copy: copy,
+    // Rendering helpers are exposed so DOM-level tests can assert what the user
+    // actually sees (the POS layout regression was invisible to string tests).
+    appendMeaningBlock: appendMeaningBlock
   };
 })(typeof self !== 'undefined' ? self : this);

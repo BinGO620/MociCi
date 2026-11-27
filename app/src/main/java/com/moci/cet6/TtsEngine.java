@@ -258,8 +258,38 @@ final class TtsEngine {
         }
     }
 
+    /** Last time a re-init was attempted, to keep a failing engine from spinning. */
+    private long lastReviveAt;
+
+    /**
+     * Rebuilds the engine when it never came up. A transient failure (engine
+     * service not yet bound, voice data being installed, package visibility
+     * granted after a manifest change) otherwise disabled speech for the whole
+     * process lifetime — every later tap returned false with no way back except
+     * force-stopping the app.
+     *
+     * Throttled: at most one attempt per few seconds, so a device with no usable
+     * engine does not allocate a new TextToSpeech on every single tap.
+     */
+    private synchronized void reviveIfDead() {
+        if (isReady()) return;
+        long now = System.currentTimeMillis();
+        if (now - lastReviveAt < 3000) return;
+        lastReviveAt = now;
+        try {
+            if (tts != null) {
+                try { tts.stop(); tts.shutdown(); } catch (Throwable ignored) { }
+                tts = null;
+            }
+            init();
+        } catch (Throwable t) {
+            lastError = t.getMessage();
+        }
+    }
+
     synchronized boolean speak(String text, float rate) {
         if (text == null || text.trim().isEmpty()) return false;
+        if (!isReady()) reviveIfDead();
         if (!isReady()) {
             lastError = "tts not ready";
             return false;

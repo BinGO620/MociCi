@@ -147,7 +147,11 @@ final class AtomicStore {
     }
 
     JSONArray list(String rel) throws IOException {
-        File dir = resolve(rel);
+        // An empty path means "the storage root" here, so the self-test can prove
+        // directory listing works without inventing a temporary subdirectory.
+        // resolve() rejects "" by design (every other operation needs a real file),
+        // so the root is substituted before validation.
+        File dir = (rel == null || rel.trim().isEmpty()) ? root : resolve(rel);
         JSONArray arr = new JSONArray();
         File[] kids = dir.listFiles();
         if (kids == null) return arr;

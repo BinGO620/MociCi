@@ -1,10 +1,10 @@
 {
-  "versionCode": 5,
-  "versionName": "0.9.4-pre",
+  "versionCode": 6,
+  "versionName": "0.9.5-pre",
   "stage": "pre-release",
-  "notes": "修复相机拍照批改必然失败（照片读取走了存储沙箱）；照片改为离屏降采样+EXIF 旋转+压缩后再上传。",
+  "notes": "修复真机反馈 6 项：自检 list 误报、词性错行、TTS 引擎不可见且不重试、API 测试 max_tokens 过小、在线 TTS 无说明、Key 无法查看。",
   "deviceTested": {
     "date": "2026-11-27",
-    "result": "相机修复尚未真机验证（路径缺陷已由代码静态证明）；新增相机路径测试 11 例"
+    "result": "0.9.4 相机修复未及复测；本版 6 项修复来自 0.9.3/0.9.4 真机反馈，尚未在设备复测"
   }
 }
