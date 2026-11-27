@@ -1,11 +1,10 @@
 {
-  "versionCode": 3,
-  "versionName": "0.9.2-pre",
+  "versionCode": 4,
+  "versionName": "0.9.3-pre",
   "stage": "pre-release",
-  "notes": "真机反馈修复：存储写入失败、TTS 误判、错误条遮挡按键、单词字号、提示词模板分类与可编辑、API 字段示例化。",
+  "notes": "自查修复：pref 读取未解析 JSON 信封（API Key/开关全错）、TTS 参数与状态、UI 层原生桥覆盖测试。",
   "deviceTested": {
     "date": "2026-11-27",
-    "model": "用户设备（Android，截图 1/15 学习卡）",
-    "result": "首次真机运行；报告 6 类问题，本版全部修复"
+    "result": "0.9.2 尚未真机复测；本版新增原生桥模拟测试 42 例"
   }
 }

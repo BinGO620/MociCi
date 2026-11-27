@@ -1,0 +1,10 @@
+{
+  "versionCode": 4,
+  "versionName": "0.9.3-pre",
+  "stage": "pre-release",
+  "notes": "自查修复：pref 读取未解析 JSON 信封（API Key/开关全错）、TTS 参数与状态、UI 层原生桥覆盖测试。",
+  "deviceTested": {
+    "date": "2026-11-27",
+    "result": "0.9.2 尚未真机复测；本版新增原生桥模拟测试 42 例"
+  }
+}

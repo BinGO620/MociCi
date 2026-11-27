@@ -34,11 +34,15 @@
     session: null,
     settings: null,
     speechRate: 0.8,
+    // Explicit default: TTS can be triggered before loadSettings() runs, and
+    // the Java side declares a primitive float, which rejects undefined.
+    speechAccent: 'uk',
     autoSpeak: true,
     voiceSource: 'system',
     onlineTts: '',
     ttsIssueNotified: false,
-    lastError: null
+    lastError: null,
+    errorLog: []
   };
 
   /* ------------------------------------------------------------- utilities */
@@ -183,7 +187,7 @@
         var blob = nativeParse(root.MociNative.readBase64(key), null);
         if (blob && blob.ok && blob.base64) {
           var mime = 'audio/mpeg';
-          try { mime = root.MociNative.prefGet('onlineMime:' + key) || mime; } catch (e2) { }
+          mime = getPref('onlineMime:' + key, mime);
           return { src: 'data:' + mime + ';base64,' + blob.base64, kind: 'online' };
         }
       } catch (e3) { }
@@ -1403,10 +1407,7 @@
     });
     screen.appendChild(list);
 
-    var key = '';
-    if (native && bridge) {
-      try { key = root.MociNative.prefGet('apiKey') || ''; } catch (e) { }
-    }
+    var key = getPref('apiKey', '');
     if (!key) {
       screen.appendChild(el('div', { class: 'card pad', style: 'margin-top:12px;background:var(--warn-soft)' }, [
         el('div', { class: 'small', style: 'color:var(--warn);font-weight:650', text: '需要配置 API Key' }),
@@ -1435,13 +1436,9 @@
 
   function gradeHandwriting(s, base64) {
     var key = '';
-    var baseUrl = '';
-    var model = '';
-    try {
-      key = root.MociNative.prefGet('apiKey') || '';
-      baseUrl = root.MociNative.prefGet('baseUrl') || 'https://llm.ujn.edu.cn/v1';
-      model = root.MociNative.prefGet('model') || 'Qwen3.8-Flash-Next';
-    } catch (e) { }
+    var key = getPref('apiKey', '');
+    var baseUrl = getPref('baseUrl', 'https://llm.ujn.edu.cn/v1');
+    var model = getPref('model', 'Qwen3.8-Flash-Next');
     if (!key) { toast('请先在设置里配置 API Key'); return; }
     var items = s.questions.map(function (q) { return { type: q.type, answer: q.answer, prompt: q.prompt }; });
     var prompt = appmeta.buildGradingPrompt(items);
@@ -2327,19 +2324,39 @@
     });
   }
 
+  /**
+   * Preference accessors.
+   *
+   * Every MociNative method returns a JSON *string* such as
+   * {"ok":true,"value":"sk-..."}. Reading it directly made getPref() return the
+   * whole envelope and getPrefBool() return `true` for every key, because a
+   * non-empty string is always truthy. Both are parsed here.
+   */
   function getPref(k, def) {
-    if (native) { try { var v = root.MociNative.prefGet(k); if (v != null && v !== '') return v; } catch (e) { } }
+    if (native) {
+      try {
+        var r = nativeParse(root.MociNative.prefGet(k), null);
+        if (r && r.ok && typeof r.value === 'string' && r.value !== '') return r.value;
+      } catch (e) { }
+    }
     return def;
   }
   function setPref(k, v) {
-    if (native) { try { root.MociNative.prefSet(k, v); return; } catch (e) { } }
+    if (!native) return;
+    try { root.MociNative.prefSet(k, v); } catch (e) { showError('保存设置失败：' + (e.message || e)); }
   }
   function getPrefBool(k, def) {
-    if (native) { try { return !!root.MociNative.prefGetBool(k, def); } catch (e) { } }
+    if (native) {
+      try {
+        var r = nativeParse(root.MociNative.prefGetBool(k, !!def), null);
+        if (r && r.ok) return !!r.value;
+      } catch (e) { }
+    }
     return def;
   }
   function setPrefBool(k, v) {
-    if (native) { try { root.MociNative.prefSetBool(k, v); } catch (e) { } }
+    if (!native) return;
+    try { root.MociNative.prefSetBool(k, !!v); } catch (e) { showError('保存设置失败：' + (e.message || e)); }
   }
 
   /* ------------------------------------------------------------------- boot */
