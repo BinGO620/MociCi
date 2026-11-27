@@ -275,6 +275,32 @@ final class NativeBridge {
         }
     }
 
+    /** Recorded-audio storage usage, so settings can show what it costs. */
+    @JavascriptInterface
+    public String audioStats() {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("bytes", http.audioBytes());
+            o.put("budgetBytes", http.audioBudget());
+            return ok(o);
+        } catch (Throwable t) {
+            return err(String.valueOf(t.getMessage()));
+        }
+    }
+
+    /** Drops every cached clip (settings action). */
+    @JavascriptInterface
+    public String audioClear() {
+        try {
+            http.trimAudioCache(0);
+            JSONObject o = new JSONObject();
+            o.put("bytes", http.audioBytes());
+            return ok(o);
+        } catch (Throwable t) {
+            return err(String.valueOf(t.getMessage()));
+        }
+    }
+
     // ---------- misc ----------
 
     @JavascriptInterface

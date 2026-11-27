@@ -23,7 +23,8 @@ const ARITY = {
   ttsCachedPath: 1, ttsOpenSettings: 0, ttsSetRate: 1,
   pickFile: 1, pickImage: 1, camera: 1, saveFile: 4,
   toast: 1, copyText: 1, applyTheme: 1, platform: 0,
-  httpPost: 3, httpGetBase64: 2, audioFetch: 3, audioCachedPath: 1
+  httpPost: 3, httpGetBase64: 2, audioFetch: 3, audioCachedPath: 1,
+  audioStats: 0, audioClear: 0
 };
 
 function createBridge(opts) {
@@ -158,6 +159,13 @@ function createBridge(opts) {
     audioCachedPath(key) {
       const p = audioFiles[String(key)];
       return okObj({ path: p || '' });
+    },
+    audioStats() {
+      return okObj({ bytes: Object.keys(audioFiles).length * 1024, budgetBytes: 200 * 1024 * 1024 });
+    },
+    audioClear() {
+      Object.keys(audioFiles).forEach(k => { delete audioFiles[k]; });
+      return okObj({ bytes: 0 });
     },
     pickFile() { return okObj({}); },
     pickImage() { return okObj({}); },

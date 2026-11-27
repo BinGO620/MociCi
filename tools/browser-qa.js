@@ -196,7 +196,7 @@ function check(name, ok, detail) {
   await sleep(500);
   const done = await cdp.eval('document.body.innerText');
   check('导入完成页', done.includes('导入完成') && done.includes('新增 4'));
-  check('完成页说明按需准备发音', done.includes('发音将在第一次听写时按需准备'));
+  check('完成页说明发音准备方式', done.includes('真人发音') && done.includes('自动补齐'));
   await cdp.shot('05-import-done');
 
   // 5. home with words (the completion page's "回词本" goes to the book tab,

@@ -21,7 +21,11 @@ final class HttpProxy {
 
     HttpProxy(android.content.Context ctx, Prefs prefs) {
         this.prefs = prefs;
-        this.audioDir = new java.io.File(ctx.getCacheDir(), "audio");
+        // Recorded audio goes in the FILES dir, not the cache dir. Android may
+        // purge the cache at any time under storage pressure, which would make a
+        // word silently revert to the robotic system voice after the user has
+        // already "downloaded" it. The files dir only goes away on uninstall.
+        this.audioDir = new java.io.File(ctx.getFilesDir(), "audio");
     }
 
     interface Callback {
@@ -183,6 +187,9 @@ final class HttpProxy {
                 if (!tmp.renameTo(f)) {
                     throw new Exception("缓存写入失败");
                 }
+                // Enforce the budget after each write: the clips persist in the
+                // files dir, so this is the only thing keeping them bounded.
+                trimAudioCache(audioBudget());
                 String mime = conn.getContentType();
                 result = "{\"ok\":true,\"path\":" + org.json.JSONObject.quote(f.getAbsolutePath())
                         + ",\"bytes\":" + bytes.length
@@ -201,10 +208,72 @@ final class HttpProxy {
         try {
             if (key == null || key.isEmpty()) return "";
             java.io.File f = new java.io.File(audioDir, fileNameFor(key));
-            return f.exists() && f.length() > 0 ? f.getAbsolutePath() : "";
+            if (!f.exists() || f.length() == 0) return "";
+            // Touch it: eviction removes the least-recently-used clips first, and a
+            // word the user still hears must not look stale.
+            f.setLastModified(System.currentTimeMillis());
+            return f.getAbsolutePath();
         } catch (Throwable t) {
             return "";
         }
+    }
+
+    /** Total bytes currently used by recorded audio. */
+    long audioBytes() {
+        try {
+            java.io.File[] fs = audioDir.listFiles();
+            if (fs == null) return 0;
+            long n = 0;
+            for (java.io.File f : fs) if (f.isFile()) n += f.length();
+            return n;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /**
+     * Caps the audio cache.
+     *
+     * The clips live in the files dir so they survive, which means nothing but
+     * this trims them: a large imported wordbook could otherwise grow without
+     * limit. Oldest-touched files go first, so words still being studied are the
+     * last to be dropped. The budget also shrinks when the device is genuinely
+     * short on space, rather than filling the disk.
+     */
+    void trimAudioCache(long budgetBytes) {
+        try {
+            java.io.File[] fs = audioDir.listFiles();
+            if (fs == null || fs.length == 0) return;
+            long total = 0;
+            for (java.io.File f : fs) if (f.isFile()) total += f.length();
+            if (total <= budgetBytes) return;
+
+            java.util.List<java.io.File> files = new java.util.ArrayList<>();
+            for (java.io.File f : fs) if (f.isFile() && !f.getName().endsWith(".tmp")) files.add(f);
+            files.sort(java.util.Comparator.comparingLong(java.io.File::lastModified));
+            for (java.io.File f : files) {
+                if (total <= budgetBytes) break;
+                long len = f.length();
+                if (f.delete()) total -= len;
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    /**
+     * How much audio we are willing to keep: a fixed ceiling, lowered when the
+     * device is close to full so this feature can never be the reason an install
+     * or a photo fails.
+     */
+    long audioBudget() {
+        long ceiling = 200L * 1024 * 1024;
+        try {
+            long free = audioDir.getUsableSpace();
+            if (free > 0) {
+                long share = free / 10;              // never more than 10% of free space
+                if (share < ceiling) ceiling = share;
+            }
+        } catch (Throwable ignored) { }
+        return Math.max(20L * 1024 * 1024, Math.min(ceiling, 200L * 1024 * 1024));
     }
 
     /** Stable, filesystem-safe name derived from the caller's cache key. */

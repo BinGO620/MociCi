@@ -1094,6 +1094,53 @@
     return screen;
   }
 
+  /**
+   * After an import, fetch audio for the words the user will meet first.
+   *
+   * Downloading a whole wordbook up front would spend data and disk on words that
+   * may not be studied for weeks, and imported books can be thousands of entries.
+   * The next study group is what actually gets heard in the next few minutes, so
+   * warming exactly that makes the first session fully human-voiced at a bounded
+   * cost. Everything else fills in as it is reached (see prefetchStudyCards).
+   */
+  function prefetchFirstStudyGroup() {
+    if (!wantsHumanAudio()) return;
+    try {
+      var settings = store.loadSettings();
+      var groupSize = Number(settings.dailyGoal) || 15;
+      var newPerDay = Number(settings.newPerDay);
+      if (!isFinite(newPerDay)) newPerDay = 7;
+      var cards = selector.selectLearnGroup(store.loadBook(), {
+        scope: state.scope, now: Date.now(), seed: Date.now() % 100000,
+        groupSize: groupSize, newPerDay: newPerDay
+      });
+      if (!cards.length) return;
+      // Same text set the study screen will play, including collocations.
+      prefetchStudyCards(cards, 0, 6);
+    } catch (e) { /* warming is best-effort; never block an import */ }
+  }
+
+  /** Shows how much disk the recorded audio uses, with a clear-out action. */
+  function audioStorageRow() {
+    if (!native) {
+      return el('div', { class: 'tiny muted', style: 'margin-top:8px', text: '浏览器调试不缓存音频' });
+    }
+    var info = {};
+    try { info = nativeParse(root.MociNative.audioStats(), {}) || {}; } catch (e) { info = {}; }
+    var used = util.formatBytes(info.bytes || 0);
+    var budget = util.formatBytes(info.budgetBytes || 0);
+    return el('div', { style: 'margin-top:10px' }, [
+      el('div', { class: 'tiny muted', text: '已缓存发音：' + used + ' / 上限 ' + budget }),
+      el('div', { class: 'tiny muted', text:
+        '缓存的发音保存在 App 私有目录，卸载才会清除；超过上限时自动删除最久未听的录音。' }),
+      el('button', { class: 'btn ghost sm', style: 'margin-top:6px', text: '清除已缓存发音', onclick: function () {
+        try { root.MociNative.audioClear(); } catch (e) { }
+        toast('已清除发音缓存');
+        render();
+      } })
+    ]);
+  }
+
   function screenImportDone() {
     var r = state.lastImport || { added: 0, updated: 0, skipped: 0 };
     var screen = el('div', { class: 'screen narrow' });
@@ -1101,12 +1148,15 @@
       el('div', { class: 'big', text: '✅' }),
       el('h2', { text: '导入完成' }),
       el('p', { class: 'muted small', text: '新增 ' + r.added + '，更新 ' + r.updated + '，跳过 ' + r.skipped + ' 行' }),
-      el('p', { class: 'tiny muted', text: '发音将在第一次听写时按需准备。' }),
+      el('p', { class: 'tiny muted', text: '正在为接下来要学的词准备真人发音，其余的词会在学到时自动补齐。' }),
       el('div', { class: 'btn-row', style: 'margin-top:16px' }, [
         el('button', { class: 'btn', text: '去学习', onclick: function () { goTab('home'); startStudy(); } }),
         el('button', { class: 'btn ghost', text: '回词本', onclick: function () { goTab('book'); } })
       ])
     ]));
+    // Warm the group the user is about to study, after the screen is painted so
+    // the import never appears to hang.
+    setTimeout(prefetchFirstStudyGroup, 400);
     return screen;
   }
 
@@ -2421,7 +2471,8 @@
         if (v && v.indexOf('{text}') < 0) { showError('URL 模板必须包含 {text} 占位符'); return; }
         saveSettings({ onlineTts: v });
         toast(v ? '已保存自定义发音接口' : '已恢复使用默认真人发音');
-      } })
+      } }),
+      audioStorageRow()
     ]);
     screen.appendChild(voiceCard);
 
