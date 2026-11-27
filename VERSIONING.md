@@ -29,7 +29,7 @@ bash tools/build.sh --no-archive  # 跳过归档（用于反复调试）
 1. 从 `version.json` 注入版本号
 2. 校验签名与 assets 路径
 3. 计算 SHA-256
-4. 把 APK、`SHA256SUMS.txt`、`version.json`、`KNOWN-ISSUES.md` 复制到 `dist/archive/<versionName>/`
+4. 把 APK、`SHA256SUMS.txt`、`version.json`、`KNOWN-ISSUES.md` 复制到 `dist/archive/<versionName>/`（该目录的 APK 不入库）
 5. 在仓库根写 `MANIFEST.txt`
 
 ## 目录约定
@@ -39,10 +39,19 @@ bash tools/build.sh --no-archive  # 跳过归档（用于反复调试）
 | `app/` | 源码 | ✅ |
 | `tests/` | 单元测试 | ✅ |
 | `tools/` | 构建、开发服务器、QA 脚本 | ✅ |
-| `dist/archive/` | **每个历史版本的 APK + 校验和** | ✅ |
+| `dist/archive/` | **每个历史版本的校验和、说明、version.json**（APK 本体不入库） | ✅ |
+| GitHub Releases | **安装包分发渠道**，每个 tag 挂一个 APK | — |
 | `dist/*.apk` | 当前构建产物（每次覆盖） | ❌ |
 | `build/` | 中间产物，可随时删除重建 | ❌ |
 | `secrets/` | 签名密钥 | ❌ **绝不入库** |
+
+## 发布流程（GitHub Releases）
+
+安装包通过 Release 分发，不进入 git 仓库。
+
+
+
+未安装 `gh` 时用 GitHub API 上传（见本次操作记录）。
 
 ## 发布前检查清单
 
@@ -56,11 +65,16 @@ bash tools/build.sh --no-archive  # 跳过归档（用于反复调试）
 ## 回滚方式
 
 ```bash
-# 从归档恢复某个历史版本
-adb install -r dist/archive/<version>/MociCi-<version>.apk
+# 从 GitHub Releases 下载某个历史版本并安装
+VER=0.9.1-pre
+curl -L -o old.apk "https://github.com/BinGO620/MociCi/releases/download/v${VER}/MociCi-${VER}.apk"
+adb install -r old.apk
+```
 
-# 核对是否为同一份构建
-cd dist/archive/<version> && sha256sum -c SHA256SUMS.txt
+核对校验和：
+
+```bash
+cd "dist/archive/${VER}" && sha256sum -c SHA256SUMS.txt
 ```
 
 > 覆盖安装必须使用同一把签名密钥，否则系统会拒绝升级，只能卸载重装。

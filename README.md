@@ -2,6 +2,22 @@
 
 本 App 出厂不内置任何词库、例句、搭配或音频。词本完全由你自己导入，保存在本机。
 
+## 下载安装
+
+**最新版**：[Releases](https://github.com/BinGO620/MociCi/releases)
+
+当前预发布版 `v0.9.1-pre`：
+https://github.com/BinGO620/MociCi/releases/download/v0.9.1-pre/MociCi-0.9.1-pre.apk
+
+| | |
+|---|---|
+| 要求 | Android 7.0（API 24）及以上 |
+| 包名 | `com.moci.cet6` |
+| 大小 | 约 110 KB |
+| 状态 | ⚠️ **预发布，未经真机验证**，已知问题见 [KNOWN-ISSUES.md](KNOWN-ISSUES.md) |
+
+安装时手机需允许「安装未知来源应用」。首次打开是空词本，按下面的三步导入。
+
 ## 三步上手
 
 1. 复制 App 里的「AI 生成词表」提示词，粘贴到任意 AI 对话里，让它生成词表。

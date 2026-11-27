@@ -23,3 +23,7 @@ Thumbs.db
 
 # ---- 归档例外：保留每个历史版本的 APK 与校验和 ----
 !dist/archive/**
+
+# 安装包改由 GitHub Releases 分发；仓库只保留校验和与说明
+dist/archive/**/*.apk
+dist/archive/**/*.idsig
