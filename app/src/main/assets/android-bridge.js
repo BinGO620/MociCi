@@ -89,6 +89,10 @@
     httpGetBase64: function (url) {
       return wrap('get', function (id) { root.MociNative.httpGetBase64(url, id); });
     },
+    // Read-only JSON GET used by the connection diagnostic.
+    httpGetJson: function (url) {
+      return wrap('gj', function (id) { root.MociNative.httpGetJson(url, id); });
+    },
     // Native-side download straight to disk: resolves {ok, path, bytes, mime}.
     audioFetch: function (url, key) {
       return wrap('aud', function (id) { root.MociNative.audioFetch(url, key, id); });

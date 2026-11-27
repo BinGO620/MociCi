@@ -257,6 +257,12 @@ final class NativeBridge {
         http.getBase64(url, json -> activity.jsResolve(callbackId, json));
     }
 
+    /** Plain authenticated JSON GET, used by the connection diagnostic. */
+    @JavascriptInterface
+    public void httpGetJson(String url, String callbackId) {
+        http.getJson(url, json -> activity.jsResolve(callbackId, json));
+    }
+
     /** Downloads audio straight to the cache; resolves with {ok, path, bytes}. */
     @JavascriptInterface
     public void audioFetch(String url, String key, String callbackId) {

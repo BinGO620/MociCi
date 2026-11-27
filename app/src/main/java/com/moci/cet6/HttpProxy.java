@@ -135,6 +135,43 @@ final class HttpProxy {
     }
 
     /**
+     * Plain JSON GET with the configured credentials.
+     *
+     * Exists so the app can tell a network-level block apart from a gateway
+     * rejection without guessing: a trivial read-only endpoint either answers
+     * or is blocked in exactly the same way, and that difference is diagnostic.
+     */
+    void getJson(String url, Callback cb) {
+        pool.execute(() -> {
+            String result;
+            HttpURLConnection conn = null;
+            try {
+                if (!allowed(url)) throw new Exception("仅允许 HTTPS 请求（可在设置中为自建服务开启 HTTP）");
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(12_000);
+                conn.setReadTimeout(20_000);
+                conn.setRequestProperty("Accept", "application/json");
+                String auth = prefs.get("apiKey", "");
+                if (auth != null && !auth.isEmpty()) {
+                    conn.setRequestProperty("Authorization", "Bearer " + auth);
+                }
+                int code = conn.getResponseCode();
+                InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+                String text = in == null ? "" : readAll(in, 2 * 1024 * 1024);
+                result = "{\"ok\":" + (code >= 200 && code < 300 ? "true" : "false")
+                        + ",\"status\":" + code
+                        + ",\"body\":" + org.json.JSONObject.quote(text) + "}";
+            } catch (Throwable t) {
+                result = errorJson(t);
+            } finally {
+                if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) { }
+            }
+            cb.done(result);
+        });
+    }
+
+    /**
      * Downloads audio straight to the cache and reports only the path.
      *
      * The generic getBase64 path sends the whole clip through the JS bridge twice

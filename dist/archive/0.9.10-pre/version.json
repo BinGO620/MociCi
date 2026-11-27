@@ -1,0 +1,10 @@
+{
+  "versionCode": 11,
+  "versionName": "0.9.10-pre",
+  "stage": "pre-release",
+  "notes": "修复语速对真人发音无效、语速条拉不到最右；移除第三方 TTS 配置区；403 增加网络层自检并提示校内 API 需连校园网。",
+  "deviceTested": {
+    "date": "2026-11-27",
+    "result": "403 根因已确认为校内 API 仅限校园网；语速与滑块样式需真机复测"
+  }
+}

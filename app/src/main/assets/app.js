@@ -304,6 +304,19 @@
     stopAudio();
     try {
       audioEl = new Audio(src);
+      // The speed setting only reached the system engine, so with recorded audio
+      // (the default source) dragging the slider did nothing at all. Apply it to
+      // the clip as well; preservesPitch keeps the voice natural instead of
+      // sounding chipmunked when sped up.
+      try {
+        var v = Number(state.speechRate);
+        if (isFinite(v) && v > 0) {
+          audioEl.playbackRate = v;
+          audioEl.preservesPitch = true;
+          audioEl.mozPreservesPitch = true;
+          audioEl.webkitPreservesPitch = true;
+        }
+      } catch (e0) { }
       audioEl.addEventListener('ended', stopAudio);
       var p = audioEl.play();
       if (p && p.catch) p.catch(function () { stopAudio(); });
@@ -2420,7 +2433,6 @@
     ]);
     var auto = el('input', { type: 'checkbox', checked: state.autoSpeak });
     auto.addEventListener('change', function () { saveSettings({ autoSpeak: auto.checked }); });
-    var online = el('input', { class: 'input', value: state.onlineTts, placeholder: 'https://example.com/tts?q={text}' });
     var voiceSource = el('div', { class: 'chips' }, [
       el('button', { class: 'chip' + (state.voiceSource !== 'system' ? ' on' : ''), text: '真人发音（默认）', onclick: function () { saveSettings({ voiceSource: 'human' }); render(); } }),
       el('button', { class: 'chip' + (state.voiceSource === 'system' ? ' on' : ''), text: '系统 TTS', onclick: function () { saveSettings({ voiceSource: 'system' }); render(); } })
@@ -2456,22 +2468,11 @@
       ]),
       el('label', { class: 'field' }, [el('span', { text: '语速 ' + state.speechRate }), rate]),
       el('label', { class: 'checkline' }, [auto, el('div', { class: 'body' }, [el('div', { class: 'small', text: '学习卡翻面自动发音' })])]),
-      el('label', { class: 'field' }, [el('span', { text: '自定义发音接口（可选，含 {text} / {accent}）' }), online]),
-      el('div', { class: 'tiny muted', style: 'margin-top:4px', text:
-        '默认使用在线真人发音，无需配置。若要换成自建接口，填地址即可，' +
-        '支持 {text}（要读的内容）与 {accent}（us / uk）占位符。' }),
-      el('div', { class: 'tiny muted', text:
-        '工作方式：第一次听到某个词时用系统语音先出声，同时后台下载该词的真人录音并缓存；' +
-        '之后同一个词直接播放本地录音，断网也能用。下载失败不会报错，继续用系统语音。' }),
+      el('div', { class: 'tiny muted', style: 'margin-top:8px', text:
+        '真人发音：第一次听到某个词时用系统语音先出声，同时后台下载真人录音并缓存；' +
+        '之后同一个词直接播放本地录音，断网也能听。' }),
       el('div', { class: 'tiny', style: 'color:var(--muted)', text:
-        '说明：真人发音会把单词文本发送到在线发音服务以取得音频；若你希望完全不发网络请求，' +
-        '请选「系统 TTS」。' }),
-      el('button', { class: 'btn ghost sm', text: '保存发音接口', onclick: function () {
-        var v = online.value.trim();
-        if (v && v.indexOf('{text}') < 0) { showError('URL 模板必须包含 {text} 占位符'); return; }
-        saveSettings({ onlineTts: v });
-        toast(v ? '已保存自定义发音接口' : '已恢复使用默认真人发音');
-      } }),
+        '真人发音会把单词文本发送到在线发音服务以取得音频；若希望完全不联网，请选「系统 TTS」。' }),
       audioStorageRow()
     ]);
     screen.appendChild(voiceCard);
@@ -2600,6 +2601,25 @@
     ]);
   }
 
+  /**
+   * Read-only reachability probe used to locate a 403.
+   * Calls back with true (reachable), false (blocked) or null (inconclusive).
+   */
+  function probeGatewayModels(base, cb) {
+    if (!native || !bridge || !bridge.httpGetJson) { cb(null); return; }
+    var done = false;
+    var finish = function (v) { if (!done) { done = true; cb(v); } };
+    try {
+      bridge.httpGetJson(base + '/models').then(function (r) {
+        if (!r) { finish(null); return; }
+        if (r.ok) { finish(true); return; }
+        // Same empty 403 as the POST ⇒ the block is in front of the gateway.
+        finish(r.status === 403 && !r.body);
+      });
+    } catch (e) { finish(null); }
+    setTimeout(function () { finish(null); }, 12000);
+  }
+
   function testConnection() {
     if (!native || !bridge) { toast('浏览器调试请直接在终端测试'); return; }
     var key = getPref('apiKey', '');
@@ -2635,14 +2655,31 @@
       // carrier, or a WAF), which no client-side setting can fix. Say so instead
       // of showing a bare "HTTP 403" that looks like a key problem.
       if (status === 403 && !detail) {
+        // Prove where the block comes from instead of guessing. /models is a
+        // trivial read-only endpoint: if IT is also refused, the block sits in
+        // front of the gateway (campus network / carrier / WAF) and no app
+        // setting can fix it. If it succeeds, the path is fine and the problem
+        // is specific to the request.
         var who = [];
         if (r && r.server) who.push('Server: ' + r.server);
-        if (r && r.via) who.push('Via: ' + r.via);
-        showError('请求被中途拦截（HTTP 403，响应体为空）。' +
-          '这不是 API Key 的问题——网关自己的拒绝会返回 JSON 说明。' +
-          '通常原因：当前网络（校园网 / 运营商 / 代理）拦截了该地址。' +
-          '请换一个网络（如手机热点或另一张 SIM）再试。' +
-          (who.length ? '［' + who.join('，') + '］' : ''));
+        probeGatewayModels(base, function (ok) {
+          if (ok === false) {
+            showError('网关拒绝访问（HTTP 403，响应体为空）。' +
+              '自检结果：连只读的 /models 也被拒绝，说明请求在到达网关前就被挡下了，' +
+              '与 API Key、模型名无关。' +
+              '校内 API 通常只允许校园网访问：请连接校园 WiFi 或学校 VPN 后再试' +
+              '（手机流量的公网 IP 不在校内白名单里）。' +
+              (who.length ? '［' + who.join('，') + '］' : ''));
+          } else if (ok === true) {
+            showError('网关可达，但该请求被拒（HTTP 403）。' +
+              '自检结果：/models 正常，说明不是网络问题，可能是模型名或权限受限。' +
+              '请到 /models 确认可用模型后再试。模型：' + model);
+          } else {
+            showError('请求被拒绝（HTTP 403，响应体为空）。' +
+              '可能是网络层拦截或网关权限限制，请换网络重试。' +
+              (who.length ? '［' + who.join('，') + '］' : ''));
+          }
+        });
         return;
       }
       if (status === 401) {

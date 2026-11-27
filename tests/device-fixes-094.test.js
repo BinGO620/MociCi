@@ -161,17 +161,20 @@ test('api: the default model is one this gateway actually serves', () => {
 
 /* ------------------------------------------------------------- 5. online TTS */
 
-test('pronunciation: the source explains what it needs and how it behaves', () => {
-  assert.ok(/\{text\}/.test(APP), 'the placeholder must be documented');
+// The custom-endpoint UI was removed in 0.9.10 as unnecessary surface: recorded
+// audio is built in and needs no configuration. What remains must still tell the
+// user where sound comes from and that it can be kept fully offline.
+test('pronunciation: the source explains its behaviour', () => {
   assert.ok(/真人发音/.test(APP), 'the default human-audio source must be named');
-  assert.ok(/后台下载/.test(APP), 'the cache-then-play behaviour must be described accurately');
-  assert.ok(/断网也能用/.test(APP), 'offline playback after the first listen must be stated');
-  assert.ok(/不会报错/.test(APP), 'the silent fallback must be stated');
+  assert.ok(/断网/.test(APP), 'offline playback after the first listen must be stated');
   assert.ok(/发送到在线发音服务/.test(APP), 'sending the word off-device must be disclosed');
+  assert.ok(/系统 TTS/.test(APP), 'the offline-only alternative must be offered');
 });
 
-test('online tts: a template without {text} is rejected', () => {
-  assert.ok(/indexOf\('\{text\}'\) < 0/.test(APP), 'a template lacking {text} must be refused');
+test('pronunciation: the built-in source needs no configuration', () => {
+  // No template field means nothing to validate and nothing to misconfigure.
+  assert.ok(!/indexOf\('\{text\}'\) < 0/.test(APP), 'there is no template to validate');
+  assert.ok(/dict\.youdao\.com\/dictvoice/.test(APP), 'the built-in provider is wired in');
 });
 
 /* ----------------------------------------------------------------- 6. API key */

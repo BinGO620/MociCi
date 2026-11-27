@@ -24,7 +24,7 @@ const ARITY = {
   pickFile: 1, pickImage: 1, camera: 1, saveFile: 4,
   toast: 1, copyText: 1, applyTheme: 1, platform: 0,
   httpPost: 3, httpGetBase64: 2, audioFetch: 3, audioCachedPath: 1,
-  audioStats: 0, audioClear: 0
+  audioStats: 0, audioClear: 0, httpGetJson: 2
 };
 
 function createBridge(opts) {
@@ -39,6 +39,8 @@ function createBridge(opts) {
   // Download-to-disk audio cache (mirrors HttpProxy.fetchToFile).
   const audioFiles = {};
   let audioFails = opts.audioFails === true;
+  // Simulates a network-level 403 (empty body) on the diagnostic probe.
+  let gatewayBlocked = opts.gatewayBlocked === true;
   // How async native callbacks answer JS. android-bridge.js installs
   // __mociResolve inside the sandbox, which this module cannot reach, so the
   // test that boots the sandbox hands the resolver in here.
@@ -167,6 +169,13 @@ function createBridge(opts) {
       Object.keys(audioFiles).forEach(k => { delete audioFiles[k]; });
       return okObj({ bytes: 0 });
     },
+    /** Mirrors HttpProxy.getJson; `gatewayBlocked` simulates a network-level 403. */
+    httpGetJson(url, callbackId) {
+      const reply = gatewayBlocked
+        ? JSON.stringify({ ok: false, status: 403, body: '' })
+        : JSON.stringify({ ok: true, status: 200, body: '{"data":[]}' });
+      setTimeout(() => { if (resolver) resolver(callbackId, reply); }, 0);
+    },
     pickFile() { return okObj({}); },
     pickImage() { return okObj({}); },
     camera() { return okObj({}); },
@@ -204,6 +213,7 @@ function createBridge(opts) {
     setTts(on) { ttsAvailable = on; },
     setFailWrites(on) { failWrites = on; },
     setAudioFails(on) { audioFails = on; },
+    setGatewayBlocked(on) { gatewayBlocked = on; },
     /** Route async replies to the sandbox's __mociResolve. */
     setResolver(fn) { resolver = fn; },
     raw: impl
