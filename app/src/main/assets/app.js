@@ -21,6 +21,8 @@
 
   var native = !!(root.MociNative && typeof root.MociNative.readText === 'function');
   var bridge = root.MociBridge || null;
+  /** Rows added per "show more" tap in the wordbook list. */
+  var BOOK_PAGE = 200;
 
   var store = storeMod.create(storage.pick(), {
     onError: function (msg) { showError(msg); }
@@ -29,6 +31,9 @@
   var state = {
     tab: 'home',
     scope: 'all',
+    // How many wordbook rows are currently rendered. Reset on filter change so a
+    // new filter always starts from the first page.
+    bookShown: 0,
     screen: null,
     screenData: {},
     import: null,
@@ -560,20 +565,23 @@
     var now = Date.now();
 
     if (!words.length) {
+      // First-run screen. The product promise is a factory-empty wordbook, so no
+      // sample list is bundled — but the path to a first word must be obvious
+      // without reading documentation. Order: the two things a newcomer can do,
+      // then the explanation of why the book starts empty.
       var empty = el('div', { class: 'card pad empty' }, [
         el('div', { class: 'big' }, [svgIcon('import')]),
-        el('h2', { text: '词本还是空的' }),
-        el('p', { class: 'muted small', text: '默词不内置任何词库。让任意 AI 按固定格式生成词表，复制粘贴即可入库。' }),
+        el('h2', { text: '先放入你的第一个词表' }),
+        el('p', { class: 'muted small', text: '默词不内置词库——你背的永远是你自己的词。' }),
         el('div', { class: 'btn-row', style: 'margin-top:16px' }, [
-          el('button', { class: 'btn block', text: '导入词本', onclick: function () { navigate('import'); } })
+          el('button', { class: 'btn block', text: '粘贴词表导入', onclick: function () { navigate('import'); } })
         ]),
+        el('button', { class: 'btn ghost block', style: 'margin-top:8px', text: '不知道怎么准备词表？', onclick: showTemplate }),
         el('ul', { class: 'steps' }, [
-          el('li', { text: '复制下方提示词，发给任意 AI 生成词表' }),
-          el('li', { text: '把 AI 输出的代码块整段复制进「导入」' }),
-          el('li', { text: '确认摘要后开始学习、听写' })
-        ]),
-        el('button', { class: 'btn ghost block', style: 'margin-top:12px', text: '查看提示词模板',
-          onclick: showTemplate })
+          el('li', { text: '复制提示词，发给任意 AI，让它按格式生成词表' }),
+          el('li', { text: '把 AI 输出整段粘贴进来（也支持 CSV / TSV / JSON）' }),
+          el('li', { text: '确认解析结果后开始学习与听写' })
+        ])
       ]);
       screen.appendChild(topbar('默词', '自建词本 · 记忆曲线 · 听写检验'));
       screen.appendChild(empty);
@@ -600,6 +608,8 @@
       stat('错词', wrong)
     ]);
     screen.appendChild(stats);
+    var resume = resumeBanner();
+    if (resume) screen.appendChild(resume);
 
     var scopes = [['all', '全部'], ['due', '今日到期'], ['new', '新词'], ['learning', '学习中'], ['mastered', '已掌握'], ['wrong', '错词']];
     var chips = el('div', { class: 'chips scroll' });
@@ -719,7 +729,15 @@
         closeSheet();
         toast(v === appmeta.TEMPLATE ? '与默认一致，已清除自定义' : '已保存');
       } }),
-      el('button', { class: 'btn', text: '复制提示词', onclick: function () { copy(ta.value); } })
+      el('button', { class: 'btn', text: '复制提示词', onclick: function () {
+        copy(ta.value);
+        // Close the loop: after copying, the next step is pasting the AI's
+        // reply, so take the user straight to the import box instead of
+        // leaving them to find it.
+        closeSheet();
+        toast('已复制，可以发给 AI 了');
+        navigate('import');
+      } })
     ]);
   }
 
@@ -1208,6 +1226,128 @@
 
   /* ----------------------------------------------------------- study/dictate */
 
+  /**
+   * Persists the in-flight round so killing the app does not lose progress.
+   *
+   * Card objects are reduced to their keys: the wordbook is the single source of
+   * truth, so a resumed round must read current meanings rather than a frozen
+   * snapshot taken when the round started.
+   */
+  function persistSession() {
+    var s = state.session;
+    if (!s) return;
+    // Only meaningful for rounds that were actually started.
+    if (!s.cards || !s.cards.length) return;
+    try {
+      store.saveSession({
+        kind: s.mode === 'pick' || s.mode === 'type' || s.mode === 'hand' ? 'dictate' : 'study',
+        scope: state.scope,
+        cards: s.cards.map(function (c) { return c.key; }),
+        index: s.index,
+        flipped: s.flipped,
+        questions: (s.questions || []).map(function (q) {
+          return { type: q.type, key: q.key, owner: q.owner, ownerKey: q.ownerKey,
+                   prompt: q.prompt, answer: q.answer, rawPhrase: q.rawPhrase,
+                   noMeaning: q.noMeaning };
+        }),
+        qIndex: s.qIndex,
+        answers: s.answers || [],
+        retryPass: s.retryPass,
+        retryQuestions: s.retryQuestions,
+        retryIndex: s.retryIndex,
+        retryAnswers: s.retryAnswers,
+        firstPass: s.firstPass
+      });
+    } catch (e) { /* resuming is a convenience; never break the round over it */ }
+  }
+
+  /**
+   * Offers to continue a round that was interrupted (app killed, phone rebooted).
+   *
+   * Shown only when a saved round exists and is still fresh. The ring is rebuilt
+   * from the saved word keys against the CURRENT wordbook, so a word edited or
+   * deleted meanwhile cannot resurrect stale data.
+   */
+  function resumeBanner() {
+    var saved;
+    try { saved = store.loadSession(); } catch (e) { return null; }
+    if (!saved) return null;
+
+    var book = store.loadBook();
+    var words = (book && book.words) || {};
+    var cards = (saved.cards || []).map(function (k) {
+      var w = words[k];
+      if (!w) return null;
+      return {
+        key: k,
+        en: w.en,
+        phonetic: w.phonetic || '',
+        pos: w.pos || '',
+        zh: w.zh || '',
+        collo: (w.collo || []).slice(),
+        isNew: sm2.isNew(w.progress),
+        isReview: !sm2.isNew(w.progress)
+      };
+    }).filter(Boolean);
+    if (!cards.length) { store.clearSession(); return null; }
+
+    var isDictate = saved.kind === 'dictate';
+    var done = isDictate ? (saved.qIndex || 0) : (saved.index || 0);
+    var total = isDictate ? ((saved.questions || []).length || cards.length) : cards.length;
+    var label = isDictate ? '听写' : '学习';
+
+    return el('div', { class: 'card pad', style: 'margin-bottom:10px' }, [
+      el('div', { style: 'font-weight:650', text: '上次的' + label + '还没做完' }),
+      el('div', { class: 'tiny muted', style: 'margin-top:2px', text:
+        '进行到第 ' + Math.min(done + 1, total) + ' / ' + total + ' 题' }),
+      el('div', { class: 'btn-row', style: 'margin-top:12px' }, [
+        el('button', { class: 'btn sm', text: '继续', onclick: function () { resumeSession(saved, cards); } }),
+        el('button', { class: 'btn ghost sm', text: '放弃', onclick: function () {
+          store.clearSession();
+          render();
+        } })
+      ])
+    ]);
+  }
+
+  /** Restores a saved round and jumps straight back into it. */
+  function resumeSession(saved, cards) {
+    state.scope = saved.scope || 'all';
+    if (saved.kind === 'dictate') {
+      state.session = {
+        cards: cards,
+        index: 0,
+        flipped: false,
+        mode: 'type',
+        questions: saved.questions || [],
+        qIndex: saved.qIndex || 0,
+        answers: saved.answers || [],
+        retryPass: !!saved.retryPass,
+        retryQuestions: saved.retryQuestions || null,
+        retryIndex: saved.retryIndex || 0,
+        retryAnswers: saved.retryAnswers || [],
+        firstPass: saved.firstPass || null,
+        finished: false
+      };
+      state.dictationSpoken = null; // let the restored question speak once
+      navigate('dictate');
+      return;
+    }
+    state.session = {
+      cards: cards,
+      index: Math.min(saved.index || 0, cards.length - 1),
+      flipped: !!saved.flipped,
+      mode: null,
+      questions: null,
+      qIndex: 0,
+      answers: [],
+      finished: false
+    };
+    navigate('study');
+    ensureTtsReady();
+    prefetchStudyCards(cards, state.session.index);
+  }
+
   function startStudy() {
     var book = store.loadBook();
     var settings = store.loadSettings();
@@ -1230,6 +1370,9 @@
       finished: false
     };
     state.ttsIssueNotified = false;
+    // Save immediately: a round that opens and is then killed must still be
+    // resumable from card 1.
+    persistSession();
     navigate('study');
     ensureTtsReady();
     // Warm the first words before they are asked for. The study card had NO
@@ -1336,18 +1479,25 @@
           // visually turning over (parallel, not sequential).
           if (state.autoSpeak) speak(card.en);
           s.flipped = true;
+          persistSession();
           render();
         } })
       ]));
     } else {
       screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:14px' }, [
         el('button', { class: 'btn ghost', text: '上一张', disabled: s.index === 0 ? '' : null, onclick: function () {
-          if (s.index > 0) { s.index--; s.flipped = false; render(); prefetchStudyCards(s.cards, s.index); }
+          if (s.index > 0) {
+            s.index--; s.flipped = false;
+            persistSession();
+            render();
+            prefetchStudyCards(s.cards, s.index);
+          }
         } }),
         el('button', { class: 'btn', text: s.index === total - 1 ? '进入听写' : '下一张', onclick: function () {
           if (s.index === total - 1) { startDictation(); return; }
           s.index++;
           s.flipped = false;
+          persistSession();
           render();
           // Keep the next few words warm so their taps stay instant.
           prefetchStudyCards(s.cards, s.index);
@@ -1364,6 +1514,7 @@
       el('button', { class: 'btn danger', text: '结束', onclick: function () {
         closeSheet();
         state.session = null;
+        store.clearSession();   // an explicit end means "do not resume this"
         goTab('home');
       } })
     ]);
@@ -1474,6 +1625,9 @@
         var res = grader.judgeTyped(wrote, q.answer);
         if (s.retryPass) s.retryAnswers[s.retryIndex] = { wrote: wrote, correct: res.correct };
         else s.answers[s.qIndex] = { wrote: wrote, correct: res.correct };
+        // Record the answer before re-rendering: if the app dies right after
+        // this judgement, the resume must not ask the same question again.
+        persistSession();
         render();
         setTimeout(function () {
           var next = $('#next-q');
@@ -1501,6 +1655,7 @@
             if (isLast) { finishDictation(); return; }
             if (s.retryPass) s.retryIndex++;
             else s.qIndex++;
+            persistSession();
             render();
             // Keep the listening queue warm past the new position.
             prefetchDictation(Q, s.retryPass ? s.retryIndex : s.qIndex);
@@ -1623,6 +1778,9 @@
     store.saveStats(stats);
 
     state.session = null;
+    // The round is settled, so the saved copy must go too — otherwise the home
+    // screen keeps offering to "continue" a round that already finished.
+    store.clearSession();
     navigate('result', {
       results: results,
       kind: kind,
@@ -1931,6 +2089,7 @@
       class: 'input', placeholder: '搜索单词、释义或搭配', value: q,
       oninput: util.debounce(function () {
         state.screenData.bookQuery = this.value;
+        state.bookShown = 0;   // a new query starts from the first page
         render();
       }, 250)
     });
@@ -1940,6 +2099,7 @@
     [['all', '全部'], ['new', '新词'], ['learning', '学习中'], ['mastered', '已掌握'], ['wrong', '错词']].forEach(function (f) {
       chips.appendChild(el('button', { class: 'chip' + (filter === f[0] ? ' on' : ''), text: f[1], onclick: function () {
         state.screenData.bookFilter = f[0];
+        state.bookShown = 0;   // a new filter starts from the first page
         render();
       } }));
     });
@@ -1978,13 +2138,34 @@
       return;
     }
 
-    var wordCap = capNotice(Math.min(list.length, 300), list.length, '个词');
-    if (wordCap) screen.appendChild(wordCap);
+    // Progressive disclosure instead of a hard 300-item cut. A cap meant the
+    // list was silently incomplete — with 306 words you could never see the last
+    // six. Now everything is reachable: the first page renders eagerly and each
+    // tap appends another page, so a large book still opens fast.
+    var shown = Math.max(BOOK_PAGE, state.bookShown || BOOK_PAGE);
     var wrap = el('div', { class: 'cardlist' });
-    list.slice(0, 300).forEach(function (w) {
+    list.slice(0, shown).forEach(function (w) {
       wrap.appendChild(renderWordRow(w));
     });
     screen.appendChild(wrap);
+    if (list.length > shown) {
+      screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:12px' }, [
+        el('button', {
+          class: 'btn ghost block',
+          text: '再显示 ' + Math.min(BOOK_PAGE, list.length - shown) + ' 个（已显示 ' + shown + ' / ' + list.length + '）',
+          onclick: function () {
+            state.bookShown = shown + BOOK_PAGE;
+            render();
+          }
+        })
+      ]));
+      screen.appendChild(el('div', { class: 'btn-row' }, [
+        el('button', { class: 'btn ghost sm', text: '显示全部 ' + list.length + ' 个', onclick: function () {
+          state.bookShown = list.length;
+          render();
+        } })
+      ]));
+    }
     screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:14px' }, [
       el('button', { class: 'btn soft', text: '手动新增', onclick: openAddWord }),
       el('button', { class: 'btn ghost', text: '导入 / 追加', onclick: function () { navigate('import'); } })

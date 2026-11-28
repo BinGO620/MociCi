@@ -123,13 +123,14 @@ function check(name, ok, detail) {
 
   // 0. empty state
   const emptyText = await cdp.eval('document.body.innerText');
-  check('空态显示导入按钮', emptyText.includes('导入词本'));
-  check('空态显示三步说明', emptyText.includes('复制下方提示词'));
+  check('空态给出明确的下一步', emptyText.includes('粘贴词表导入'));
+  check('空态提供引导出口', emptyText.includes('不知道怎么准备词表'));
+  check('空态说明三步', emptyText.includes('复制提示词'));
   check('空态无内置词', !/abandon/.test(emptyText));
   await cdp.shot('01-empty');
 
   // 1. template sheet
-  await cdp.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('查看提示词模板')).click()`);
+  await cdp.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('不知道怎么准备词表')).click()`);
   await sleep(400);
   // The template is now an editable textarea so users can customise it.
   const tpl = await cdp.eval("document.querySelector('#sheet textarea') ? document.querySelector('#sheet textarea').value : ''");
@@ -142,7 +143,7 @@ function check(name, ok, detail) {
   await cdp.eval(`document.querySelector('#sheet').remove()`);
 
   // 2. import with two fenced blocks + dirty data
-  await cdp.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='导入词本').click()`);
+  await cdp.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='粘贴词表导入').click()`);
   await sleep(300);
   const dirty = [
     '我先说一句。',
@@ -540,7 +541,7 @@ function check(name, ok, detail) {
   await cdp.eval("document.querySelectorAll('.tabs button')[0].click()");
   await sleep(350);
   const emptyAgain = await cdp.eval('document.body.innerText');
-  check('清空后回到空态引导', emptyAgain.indexOf('词本还是空的') >= 0);
+  check('清空后回到空态引导', emptyAgain.indexOf('先放入你的第一个词表') >= 0);
 
 
   // 19. back-key confirmation flows (window.__mociBack is what MainActivity calls)
@@ -590,14 +591,21 @@ function check(name, ok, detail) {
   await sleep(400);
   check('结束后回到首页', (await cdp.eval("window.MociApp.state.screen")) === null);
 
-  // 20. list cap notice must be visible when a list is truncated
+  // 20. A 306-word book must be fully reachable through paging, not cut off.
   await cdp.eval("(()=>{const app=window.MociApp;const b=app.store.loadBook();for(let i=0;i<305;i++){const en='qq'+String.fromCharCode(97+(i%26))+String.fromCharCode(97+(Math.floor(i/26)%26))+i;b.words[en]={en:en,phonetic:'',pos:'n.',zh:'上限检验'+i,collo:[],tags:[],createdAt:Date.now()+i,src:'bulk',srcs:['bulk'],progress:{ef:2.5,reps:0,interval:0,due:0,lapses:0,seen:false,pass:false,last:0,wrongCount:0,lastWrongAt:0}};}app.store.saveBook(b);app.render();})()");
   await sleep(400);
   await cdp.eval("document.querySelectorAll('.tabs button')[1].click()");
   await sleep(450);
-  const capText = await cdp.eval("(()=>{const n=document.querySelector('.capnotice');return n?n.innerText:'NO NOTICE';})()");
-  check('词本列表截断有可见提示', capText.indexOf('仅显示前 300') >= 0 && capText.indexOf('搜索') >= 0 && capText.indexOf('个个') < 0, capText);
+  const paged = await cdp.eval("(()=>{const btns=[...document.querySelectorAll('.screen button')].map(b=>b.textContent);const more=btns.find(t=>t.indexOf('再显示')>=0);const all=btns.find(t=>t.indexOf('显示全部')>=0);return JSON.stringify({more:more||'',all:all||''});})()");
+  const pagedInfo = JSON.parse(paged);
+  check('大词本可继续加载', /再显示/.test(pagedInfo.more), pagedInfo.more);
+  check('大词本可一次显示全部', /显示全部/.test(pagedInfo.all), pagedInfo.all);
   await cdp.shot('28-cap-notice');
+  // Prove nothing is unreachable: show all, then count the rows.
+  await cdp.eval("(()=>{const b=[...document.querySelectorAll('.screen button')].find(x=>x.textContent.indexOf('显示全部')>=0);if(b)b.click();})()");
+  await sleep(500);
+  const rowCount = await cdp.eval("document.querySelectorAll('.cardlist .rowcard').length");
+  check('显示全部后所有词都可见', rowCount >= 306, '行数 ' + rowCount);
 
   // summary
   const passed = results.filter(r => r.ok).length;

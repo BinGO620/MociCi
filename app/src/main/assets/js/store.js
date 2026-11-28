@@ -11,6 +11,7 @@
   var STATS = 'stats.json';
   var DELETED = 'deleted.json';
   var SETTINGS = 'settings.json';
+  var SESSION = 'session.json';
   var BACKUP_DIR = 'backup';
   var MAX_BACKUPS = 7;
   var MAX_BACKUP_BYTES = 50 * 1024 * 1024;
@@ -127,6 +128,52 @@
     s.updatedAt = new Date(this.now()).toISOString();
     this._settings = s;
     return this._write(SETTINGS, s);
+  };
+
+  /* ------------------------------------------------------- in-flight session */
+
+  /**
+   * An interrupted study/dictation round.
+   *
+   * Only the minimum needed to resume is kept: the card keys, how far the user
+   * got, and their answers so far. Serialising the whole runtime session would
+   * duplicate the wordbook and go stale as soon as a word changed; storing keys
+   * means a resumed round always reads the current meanings.
+   */
+  Store.prototype.loadSession = function () {
+    var raw = this._read(SESSION, null);
+    if (!raw || !raw.cards || !raw.cards.length) return null;
+    // A stale round is worse than none: after a day the schedule has moved on,
+    // so resuming would show cards that are no longer due.
+    var age = this.now() - (Date.parse(raw.savedAt) || 0);
+    if (!isFinite(age) || age > 24 * 60 * 60 * 1000) { this.clearSession(); return null; }
+    return raw;
+  };
+
+  Store.prototype.saveSession = function (session) {
+    if (!session || !session.cards || !session.cards.length) return { ok: false };
+    var payload = {
+      version: 1,
+      savedAt: new Date(this.now()).toISOString(),
+      kind: session.kind || 'study',
+      scope: session.scope || 'all',
+      cards: session.cards,
+      index: session.index || 0,
+      flipped: !!session.flipped,
+      questions: session.questions || null,
+      qIndex: session.qIndex || 0,
+      answers: session.answers || [],
+      retryPass: !!session.retryPass,
+      retryQuestions: session.retryQuestions || null,
+      retryIndex: session.retryIndex || 0,
+      retryAnswers: session.retryAnswers || [],
+      firstPass: session.firstPass || null
+    };
+    return this._write(SESSION, payload);
+  };
+
+  Store.prototype.clearSession = function () {
+    try { this.adapter.del(SESSION); } catch (e) { }
   };
 
   /* ------------------------------------------------------------- backups */
