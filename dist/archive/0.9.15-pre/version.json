@@ -1,0 +1,10 @@
+{
+  "versionCode": 16,
+  "versionName": "0.9.15-pre",
+  "stage": "pre-release",
+  "notes": "修复听写模式切换丢失进度：拍照/只看音频之间切换不再重新出题，已答内容保留。",
+  "deviceTested": {
+    "date": "2026-11-28",
+    "result": "切换流程经脚本端到端验证；真机未复测"
+  }
+}

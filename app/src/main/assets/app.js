@@ -1590,6 +1590,22 @@
     navigate('dictate');
   }
 
+  /**
+   * Returns to the dictation mode picker, keeping the built question set.
+   *
+   * Switching between "看中文", "只听音频" and "手写" used to jump back to the
+   * study cards, so the only way to try another mode was to redo the whole round.
+   * Going back to the picker keeps `cards` and rebuilds `questions` only when the
+   * user picks a mode again.
+   */
+  function backToDictatePick() {
+    var s = state.session;
+    if (!s) { goTab('home'); return; }
+    s.mode = 'pick';
+    stopSpeaking();          // a queued repeat must not outlive the screen
+    navigate('dictate');
+  }
+
   function screenDictate() {
     var s = state.session;
     var screen = el('div', { class: 'screen narrow' });
@@ -1604,41 +1620,58 @@
 
   function renderDictatePick(screen, s) {
     screen.appendChild(el('header', { class: 'topbar' }, [
-      el('button', { class: 'btn ghost sm', text: '返回', onclick: function () { navigate('study'); } }),
+      // Leaving the picker ends the dictation round; the study cards are still in
+      // session, so this returns to them rather than discarding progress.
+      el('button', { class: 'btn ghost sm', text: '返回学习', onclick: function () {
+        s.mode = null;      // back to a plain study round
+        navigate('study');
+      } }),
       el('div', { class: 'grow center', style: 'font-weight:650', text: '听写' })
     ]));
     screen.appendChild(el('div', { class: 'card pad' }, [
       el('div', { style: 'font-weight:650', text: '选择作答方式' }),
       el('div', { class: 'muted small', text: '15 题打乱顺序，含短语题。键入判分完全在本机进行。' })
     ]));
+    /**
+     * Enters a dictation mode, REUSING the question set when one already exists.
+     *
+     * Switching modes used to rebuild the questions with a fresh seed and reset
+     * the index, so a user who opened the camera and changed their mind lost every
+     * answer they had given. The questions are mode-independent (same order, same
+     * items), so they are built once per round and the mode only changes how the
+     * clue is presented.
+     */
+    function enterMode(mode) {
+      if (!s.questions || !s.questions.length) {
+        s.questions = selector.buildDictation(s.cards, { seed: Date.now() % 10000 });
+        s.qIndex = 0;
+        s.answers = [];
+      }
+      s.mode = mode;
+      // Re-read the current question aloud; a stale "already spoken" marker would
+      // silence the first item after a mode switch.
+      state.dictationSpoken = null;
+      if (mode === 'type' || mode === 'listen') prefetchDictation(s.questions, s.qIndex);
+      render();
+    }
+
     screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:14px' }, [
-      el('button', { class: 'btn', onclick: function () {
-        s.questions = selector.buildDictation(s.cards, { seed: Date.now() % 10000 });
-        s.qIndex = 0;
-        s.answers = [];
-        s.mode = 'type';
-        state.dictationSpoken = null; // a fresh round must speak question 1 again
-        render();
-        // Auto-speak is on for dictation, so warm several answers up front
-        // instead of just the first one.
-        prefetchDictation(s.questions, 0);
-      } }, [svgIcon('keyboard'), '看中文听写']),
-      el('button', { class: 'btn ghost', onclick: function () {
-        // Pure listening: nothing is shown but the speaker, so the word has to
-        // be recognised from sound alone.
-        s.questions = selector.buildDictation(s.cards, { seed: Date.now() % 10000 });
-        s.qIndex = 0;
-        s.answers = [];
-        s.mode = 'listen';
-        state.dictationSpoken = null;
-        prefetchDictation(s.questions, 0);
-        render();
-      } }, [svgIcon('speak'), '只听音频'])
+      el('button', { class: 'btn', onclick: function () { enterMode('type'); } },
+        [svgIcon('keyboard'), '看中文听写']),
+      el('button', { class: 'btn ghost', onclick: function () { enterMode('listen'); } },
+        [svgIcon('speak'), '只听音频'])
     ]));
     screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:10px' }, [
-      el('button', { class: 'btn ghost', onclick: function () { s.mode = 'hand'; render(); } }, [svgIcon('camera'), '手写拍照批改'])
+      el('button', { class: 'btn ghost', onclick: function () { enterMode('hand'); } },
+        [svgIcon('camera'), '手写拍照批改'])
     ]));
-    screen.appendChild(el('div', { class: 'muted tiny', style: 'margin-top:12px', text: '手写模式需要配置 API Key，仅手写照片会发送到 AI 批改。' }));
+    // Show progress when returning mid-round, so switching modes does not look
+    // like starting over.
+    var answeredCount = (s.answers || []).filter(Boolean).length;
+    screen.appendChild(el('div', { class: 'muted tiny', style: 'margin-top:12px', text:
+      answeredCount > 0
+        ? '已答 ' + answeredCount + ' 题，换方式不会丢失。手写模式需要配置 API Key。'
+        : '手写模式需要配置 API Key，仅手写照片会发送到 AI 批改。' }));
     return screen;
   }
 
@@ -1670,7 +1703,11 @@
       }, 220);
     }
     screen.appendChild(el('header', { class: 'topbar' }, [
-      el('button', { class: 'btn ghost sm', text: '退出', onclick: abortSession }),
+      // In a normal dictation round this goes back to the mode picker, keeping the
+      // answers already given, so the user can switch to another mode. During a
+      // retry pass there is no picker to return to, so the round is ended.
+      el('button', { class: 'btn ghost sm', text: s.retryPass ? '退出' : '换方式',
+        onclick: s.retryPass ? abortSession : backToDictatePick }),
       el('div', { class: 'grow center small muted', text: (s.retryPass ? '错题重练 ' : '第 ') + (idx + 1) + ' / ' + Q.length + ' 题' })
     ]));
     var dots = el('div', { class: 'dots' });
@@ -1893,7 +1930,9 @@
 
   function renderDictateHand(screen, s) {
     screen.appendChild(el('header', { class: 'topbar' }, [
-      el('button', { class: 'btn ghost sm', text: '返回', onclick: function () { navigate('study'); } }),
+      // Back to the mode picker, not to the study cards: the user may want the
+      // typed or listen mode instead, without redoing the round.
+      el('button', { class: 'btn ghost sm', text: '换方式', onclick: backToDictatePick }),
       el('div', { class: 'grow center', style: 'font-weight:650', text: '手写批改' })
     ]));
     if (!s.questions) {

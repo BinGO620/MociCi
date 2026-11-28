@@ -54,9 +54,47 @@ test('handwriting: the question list is numbered', () => {
 
 test('listen mode: it is offered as a separate dictation mode', () => {
   const fn = jsFn(APP, 'renderDictatePick');
-  assert.ok(/s\.mode = 'listen'/.test(fn), 'a listen mode must be selectable');
+  assert.ok(/enterMode\('listen'\)/.test(fn), 'a listen mode must be selectable');
   assert.ok(/只听音频/.test(fn), 'the entry point must say what it does');
   assert.ok(/看中文听写/.test(fn), 'the original mode must be labelled distinctly');
+});
+
+test('listen mode: switching modes keeps the questions and answers', () => {
+  // Reported on device: opening the camera, changing your mind and switching to
+  // the typed mode threw away the whole round. The questions are mode-independent,
+  // so they are built once and only the clue changes.
+  const fn = jsFn(APP, 'renderDictatePick');
+  assert.ok(/function enterMode/.test(fn), 'mode entry must be centralised');
+  const em = fn.slice(fn.indexOf('function enterMode'), fn.indexOf('function enterMode') + 900);
+  assert.ok(/if \(!s\.questions \|\| !s\.questions\.length\)/.test(em),
+    'questions may only be rebuilt when none exist');
+  assert.ok(/s\.qIndex = 0/.test(em), 'reset happens only inside that guard');
+  // The guard must wrap the reset; otherwise every switch starts over.
+  const guardAt = em.indexOf('if (!s.questions');
+  const resetAt = em.indexOf('s.qIndex = 0');
+  assert.ok(guardAt >= 0 && resetAt > guardAt, 'the reset must sit inside the guard');
+});
+
+test('listen mode: back buttons return to the mode picker, not the study cards', () => {
+  // Both the typed screen and the handwriting screen used to jump to the study
+  // cards, so trying another mode meant redoing the round.
+  assert.ok(/function backToDictatePick/.test(APP), 'a shared back helper must exist');
+  const helper = jsFn(APP, 'backToDictatePick');
+  assert.ok(/s\.mode = 'pick'/.test(helper), 'it must return to the picker');
+  assert.ok(/stopSpeaking\(\)/.test(helper), 'a queued repeat must not outlive the screen');
+
+  const hand = jsFn(APP, 'renderDictateHand');
+  assert.ok(/backToDictatePick/.test(hand), 'the handwriting screen must offer a mode switch');
+
+  const typed = jsFn(APP, 'renderDictateType');
+  assert.ok(/backToDictatePick/.test(typed), 'the typed screen must offer a mode switch');
+  assert.ok(/s\.retryPass \? abortSession : backToDictatePick/.test(typed),
+    'a retry pass has no picker to return to, so it still ends the round');
+});
+
+test('listen mode: the picker reports progress when returning mid-round', () => {
+  const fn = jsFn(APP, 'renderDictatePick');
+  assert.ok(/answeredCount/.test(fn), 'saying "已答 N 题" makes it clear nothing was lost');
 });
 
 test('listen mode: no Chinese prompt is shown', () => {
