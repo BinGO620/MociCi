@@ -173,6 +173,62 @@
     warmAudioCache(text);
   }
 
+  /**
+   * Speaks `text` several times with a pause between passes.
+   *
+   * Pure-listening dictation needs more than one pass to catch a phrase.
+   * Repetition waits for the current clip to FINISH (via playUrl's completion
+   * callback) rather than guessing a fixed delay — a wrong delay either clips
+   * the word or leaves an awkward gap. When the audio comes from the system
+   * engine there is no completion signal, so a delay scaled by the speech rate
+   * is used instead.
+   */
+  var repeatTimer = null;
+  var repeatSeq = 0;
+
+  function stopRepeating() {
+    repeatSeq++;
+    if (repeatTimer) { clearTimeout(repeatTimer); repeatTimer = null; }
+  }
+
+  function speakRepeatedly(text, times, gapMs) {
+    if (!text) return;
+    var total = Math.max(1, Number(times) || 1);
+    var gap = gapMs == null ? 700 : gapMs;
+    stopRepeating();
+    var mySeq = repeatSeq;
+    var rate = Number(state.speechRate) > 0 ? Number(state.speechRate) : 1;
+
+    function pass(n) {
+      if (mySeq !== repeatSeq) return;   // cancelled by a newer request
+      if (n >= total) return;
+
+      var cached = prefetchedAudio(text);
+      if (cached) {
+        playUrl(cached.src, function () {
+          if (mySeq !== repeatSeq) return;
+          repeatTimer = setTimeout(function () {
+            repeatTimer = null;
+            pass(n + 1);
+          }, gap);
+        });
+        return;
+      }
+
+      // System engine: no completion callback available, so estimate. A short
+      // word is roughly 600ms at normal rate; scale both by the speech rate.
+      speakSystem(text);
+      warmAudioCache(text);
+      var estimate = Math.max(450, (600 * String(text).length) / 6 / rate);
+      repeatTimer = setTimeout(function () {
+        repeatTimer = null;
+        pass(n + 1);
+      }, estimate + gap);
+    }
+
+    pass(0);
+  }
+
   /** Where human audio comes from. Youdao serves recorded audio, no key needed. */
   function audioSourceUrl(text) {
     var custom = state.onlineTts;
@@ -305,7 +361,7 @@
   }
 
   var audioEl = null;
-  function playUrl(src) {
+  function playUrl(src, onDone) {
     stopAudio();
     try {
       audioEl = new Audio(src);
@@ -322,7 +378,12 @@
           audioEl.webkitPreservesPitch = true;
         }
       } catch (e0) { }
-      audioEl.addEventListener('ended', stopAudio);
+      audioEl.addEventListener('ended', function () {
+        stopAudio();
+        // Dictation repeats a word; it must wait for THIS clip to finish rather
+        // than guess a delay, or the next pass cuts the current one off.
+        if (typeof onDone === 'function') { try { onDone(); } catch (e2) { } }
+      });
       var p = audioEl.play();
       if (p && p.catch) p.catch(function () { stopAudio(); });
     } catch (e) { showError('音频播放失败'); }
@@ -336,6 +397,9 @@
     try { if (audioEl) { audioEl.pause(); audioEl.src = ''; audioEl = null; } } catch (e) { }
   }
   function stopSpeaking() {
+    // Cancel any queued repetition first, or a scheduled second pass would fire
+    // after the user has already left the screen.
+    stopRepeating();
     stopAudio();
     if (native && bridge) { try { bridge.ttsStop(); } catch (e) { } }
     try { if (root.speechSynthesis) root.speechSynthesis.cancel(); } catch (e) { }
@@ -1531,7 +1595,9 @@
     var screen = el('div', { class: 'screen narrow' });
     if (!s) { screen.appendChild(el('p', { class: 'muted', text: '没有听写会话' })); return screen; }
     if (s.mode === 'pick') return renderDictatePick(screen, s);
-    if (s.mode === 'type' || s.mode === 'temp') return renderDictateType(screen, s);
+    // Listen mode reuses the typed renderer with the prompt hidden: judging is
+    // identical (local string comparison), and only the clue differs.
+    if (s.mode === 'type' || s.mode === 'temp' || s.mode === 'listen') return renderDictateType(screen, s);
     if (s.mode === 'hand') return renderDictateHand(screen, s);
     return screen;
   }
@@ -1556,7 +1622,20 @@
         // Auto-speak is on for dictation, so warm several answers up front
         // instead of just the first one.
         prefetchDictation(s.questions, 0);
-      } }, [svgIcon('keyboard'), '键入听写']),
+      } }, [svgIcon('keyboard'), '看中文听写']),
+      el('button', { class: 'btn ghost', onclick: function () {
+        // Pure listening: nothing is shown but the speaker, so the word has to
+        // be recognised from sound alone.
+        s.questions = selector.buildDictation(s.cards, { seed: Date.now() % 10000 });
+        s.qIndex = 0;
+        s.answers = [];
+        s.mode = 'listen';
+        state.dictationSpoken = null;
+        prefetchDictation(s.questions, 0);
+        render();
+      } }, [svgIcon('speak'), '只听音频'])
+    ]));
+    screen.appendChild(el('div', { class: 'btn-row', style: 'margin-top:10px' }, [
       el('button', { class: 'btn ghost', onclick: function () { s.mode = 'hand'; render(); } }, [svgIcon('camera'), '手写拍照批改'])
     ]));
     screen.appendChild(el('div', { class: 'muted tiny', style: 'margin-top:12px', text: '手写模式需要配置 API Key，仅手写照片会发送到 AI 批改。' }));
@@ -1578,10 +1657,17 @@
     // the question appears, so the user hears exactly what they must write. Fired
     // once per question (not on every re-render, which would repeat it after a
     // keystroke or a re-render of the same question).
+    //
+    // Listen mode has no text to read, so a single pass is not enough to catch a
+    // phrase — it plays twice, with a pause that respects the speech rate.
     if (state.autoSpeak && state.dictationSpoken !== (s.retryPass ? 'r' + idx : 'q' + idx)) {
       state.dictationSpoken = s.retryPass ? 'r' + idx : 'q' + idx;
       var speakText = q.answer;
-      setTimeout(function () { speak(speakText); }, 220);
+      var listenMode = s.mode === 'listen';
+      setTimeout(function () {
+        if (listenMode) speakRepeatedly(speakText, 2);
+        else speak(speakText);
+      }, 220);
     }
     screen.appendChild(el('header', { class: 'topbar' }, [
       el('button', { class: 'btn ghost sm', text: '退出', onclick: abortSession }),
@@ -1601,14 +1687,28 @@
     // does NOT show the phonetic spelling, and does NOT show the owning word for
     // a phrase: the owner ("affect") is a literal part of the answer
     // ("affect health"), so printing it handed over the answer.
-    screen.appendChild(el('div', { class: 'card pad' }, [
-      el('div', { class: 'qi-hint', text: q.type === 'phrase' ? '写出英文短语' : '写出英文单词' }),
-      el('div', { class: 'qi', text: q.prompt || (q.type === 'word' ? '（无中文提示）' : '') }),
-      q.type === 'word' && q.noMeaning ? el('div', { class: 'qi-hint', style: 'color:var(--warn)', text: '仅凭发音拼写，无中文提示' }) : null,
+    //
+    // Listen mode shows NO text at all — the item must be recognised from sound,
+    // which is the point of a listening test rather than a translation test.
+    var isListen = s.mode === 'listen';
+    var clueCard = el('div', { class: 'card pad' }, [
+      el('div', { class: 'qi-hint', text: isListen
+        ? (q.type === 'phrase' ? '听音频，写出短语' : '听音频，写出单词')
+        : (q.type === 'phrase' ? '写出英文短语' : '写出英文单词') }),
+      isListen
+        ? el('div', { class: 'qi', style: 'color:var(--muted);font-size:17px;font-weight:500', text: '点击下方喇叭重听' })
+        : el('div', { class: 'qi', text: q.prompt || (q.type === 'word' ? '（无中文提示）' : '') }),
+      !isListen && q.type === 'word' && q.noMeaning ? el('div', { class: 'qi-hint', style: 'color:var(--warn)', text: '仅凭发音拼写，无中文提示' }) : null,
       el('div', { class: 'btn-row', style: 'justify-content:center;margin-top:8px' }, [
-        el('button', { class: 'btn soft sm', onclick: function () { speak(q.answer); } }, [svgIcon('speak'), '听发音'])
+        el('button', { class: 'btn soft sm', onclick: function () {
+          // In listen mode a tap repeats the item twice, matching the automatic
+          // playback, so a missed pass is easy to recover.
+          if (isListen) speakRepeatedly(q.answer, 2);
+          else speak(q.answer);
+        } }, [svgIcon('speak'), isListen ? '再听两遍' : '听发音'])
       ])
-    ]));
+    ]);
+    screen.appendChild(clueCard);
 
     var input = el('input', {
       class: 'input answer-input', id: 'answer', type: 'text', spellcheck: 'false',
@@ -1807,10 +1907,12 @@
     ]));
     var list = el('div', { class: 'card pad', style: 'margin-top:12px' });
     s.questions.forEach(function (q, i) {
+      // No owning word, no phonetic: for a phrase the owner ("support") is a
+      // literal part of the answer ("provide support"), so printing it handed
+      // over half the answer — the same leak that was fixed on the typed screen.
       list.appendChild(el('div', { class: 'checkline' }, [
         el('div', { class: 'body' }, [
-          el('div', { class: 'small', text: (i + 1) + '. ' + (q.prompt || '（无中文提示）') }),
-          el('div', { class: 'tiny muted', text: q.type === 'phrase' ? '短语 · 所属 ' + q.owner : '单词' })
+          el('div', { class: 'small', text: (i + 1) + '. ' + (q.prompt || '（无中文提示）') })
         ])
       ]));
     });

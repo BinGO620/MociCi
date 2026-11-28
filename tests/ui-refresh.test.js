@@ -88,14 +88,22 @@ test('icon: an adaptive icon is used so the launcher owns the mask', () => {
   assert.ok(/<monochrome/.test(ADAPTIVE), 'Android 13 themed icons need a monochrome layer');
 });
 
-test('icon: the artwork is the M with a pen', () => {
-  assert.ok(/two stems plus two diagonals/.test(GEN), 'the M must be drawn geometrically');
-  // The app is a dictation trainer, so the second mark is a pen rather than a
-  // generic sound wave. A third element would turn to mush at 48dp.
-  assert.ok(/Pen: diagonal body with a nib/.test(GEN), 'the pen identifies dictation');
-  assert.ok(/nib/.test(GEN), 'a pen needs a tapered nib to be recognisable');
-  assert.ok(/glyphAt/.test(GEN), 'shapes are sampled per pixel, not scaled bitmaps');
+test('icon: the artwork is an owl mascot', () => {
+  // The letter-plus-pen mark was rejected as ugly; the icon is now a mascot.
+  assert.ok(/owl/i.test(GEN), 'the design must be the owl mascot');
+  assert.ok(/Ear tufts/.test(GEN), 'ear tufts are what make it read as an owl');
+  assert.ok(/inBeak|BEAK/.test(GEN), 'a beak is required for the owl silhouette');
+  assert.ok(/shadeAt/.test(GEN), 'shapes are sampled per pixel, not scaled bitmaps');
   assert.ok(/SS = 4/.test(GEN), 'supersampling keeps small sizes clean');
+});
+
+test('icon: the artwork stays inside the adaptive safe zone', () => {
+  // A launcher may crop to a circle; content wider than ~66% gets clipped. This
+  // was wrong twice during the rewrite, so it is pinned by measurement.
+  const CAL = R('tools/calibrate-icon.js');
+  assert.ok(/CONTENT_SCALE/.test(GEN), 'the content scale must be explicit');
+  assert.ok(/bounds\(\)/.test(CAL), 'a measuring script must exist');
+  assert.ok(/mipmap-xxxhdpi/.test(CAL), 'it must measure the real generated layer');
 });
 
 test('icon: all densities are generated, including the adaptive layers', () => {
@@ -110,6 +118,6 @@ test('icon: all densities are generated, including the adaptive layers', () => {
 
 test('icon: the generator draws analytically, so every size stays crisp', () => {
   assert.ok(/function drawForeground/.test(GEN), 'foreground must be drawn in code');
-  assert.ok(/distToSeg/.test(GEN), 'geometry is computed per pixel, not scaled from one bitmap');
-  assert.ok(/BRAND/.test(GEN), 'the brand colour must be shared, not hard-coded per call site');
+  assert.ok(/inEllipse/.test(GEN), 'geometry is computed per pixel, not scaled from one bitmap');
+  assert.ok(/const BG = /.test(GEN), 'the palette must be declared once');
 });

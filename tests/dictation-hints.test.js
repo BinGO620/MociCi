@@ -79,10 +79,11 @@ test('dictation: re-rendering the same question does not repeat audio', () => {
 // The entry button now renders an SVG icon alongside its label, so the anchor is
 // the label text. The label comes AFTER the handler body, so the slice must look
 // backwards from the label to find the handler.
+// The label is "看中文听写" now that a second, audio-only mode exists.
 test('dictation: a fresh round speaks the first question again', () => {
-  const at = APP.indexOf("'键入听写'");
+  const at = APP.indexOf("'看中文听写'");
   assert.ok(at > 0, 'the typed-dictation entry point must exist');
-  const handler = APP.slice(Math.max(0, at - 500), at);
+  const handler = APP.slice(Math.max(0, at - 600), at);
   assert.ok(/state\.dictationSpoken = null/.test(handler),
     'starting a new round must reset the guard, or question 1 stays silent');
 });
@@ -93,8 +94,8 @@ test('dictation: answers are prefetched so auto-speech is not delayed', () => {
   assert.ok(/ahead|depth/.test(body), 'it must look ahead, not just the current item');
   assert.ok(/prefetchDictation/.test(APP), 'the helper must be wired up');
   // Entering dictation and advancing both warm the queue.
-  const at = APP.indexOf("'键入听写'");
-  assert.ok(/prefetchDictation/.test(APP.slice(Math.max(0, at - 500), at)),
+  const at = APP.indexOf("'看中文听写'");
+  assert.ok(/prefetchDictation/.test(APP.slice(Math.max(0, at - 600), at)),
     'entering dictation must prefetch');
   const next = APP.indexOf("'下一题'");
   assert.ok(next > 0, 'the next-question button must exist');

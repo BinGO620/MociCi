@@ -234,7 +234,7 @@ function check(name, ok, detail) {
   await sleep(300);
 
   // 7. dictation type mode
-  await cdp.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('键入听写')).click()`);
+  await cdp.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.includes('看中文听写')).click()`);
   await sleep(400);
   const q1 = await cdp.eval('document.body.innerText');
   check('听写进入选择题面', /第 1 \/ \d+ 题/.test(q1), q1.split('\n').find(l => l.includes('题')) || '');
