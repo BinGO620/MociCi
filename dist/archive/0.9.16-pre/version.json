@@ -1,0 +1,10 @@
+{
+  "versionCode": 17,
+  "versionName": "0.9.16-pre",
+  "stage": "pre-release",
+  "notes": "修复白屏崩溃（学习页缺边界检查，渲染异常会清空页面）；手写页与批改结果页新增读音按钮。",
+  "deviceTested": {
+    "date": "2026-11-28",
+    "result": "崩溃场景已用脚本复现并验证修复；读音按钮真机未复测"
+  }
+}

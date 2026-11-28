@@ -538,12 +538,48 @@
   function render() {
     var app = $('#app');
     clear(app);
-    var content = state.screen ? renderScreen() : renderTab();
+    // The screen is cleared BEFORE it is drawn, so any exception thrown while
+    // building it used to leave a permanently blank page with only the floating
+    // error bar for company. Catch it, log it, and offer a way out instead.
+    var content;
+    try {
+      content = state.screen ? renderScreen() : renderTab();
+    } catch (err) {
+      showError('页面渲染失败：' + (err && err.message ? err.message : err));
+      content = renderCrashScreen(err);
+    }
     app.appendChild(content);
     // Full-screen flows (import/study/dictate) own the screen; showing tabs
     // there invites accidental navigation that would drop the session.
     var fullScreen = state.screen && ['import', 'import-summary', 'import-detail', 'import-done', 'study', 'dictate', 'result'].indexOf(state.screen) >= 0;
     if (!fullScreen) app.appendChild(renderTabs());
+  }
+
+  /** Last-resort screen: keeps the app usable when a view fails to build. */
+  function renderCrashScreen(err) {
+    var screen = el('div', { class: 'screen narrow' });
+    screen.appendChild(topbar('出了点问题'));
+    screen.appendChild(el('div', { class: 'card pad' }, [
+      el('div', { class: 'small', style: 'font-weight:650', text: '这个页面没能显示出来' }),
+      el('div', { class: 'tiny muted', style: 'margin-top:4px', text:
+        String(err && err.message ? err.message : err) }),
+      el('div', { class: 'tiny muted', style: 'margin-top:8px', text:
+        '你的数据不会因此丢失。可以回首页，或重新开始这一轮。' }),
+      el('div', { class: 'btn-row', style: 'margin-top:14px' }, [
+        el('button', { class: 'btn', text: '回首页', onclick: function () {
+          state.screen = null;
+          state.session = null;
+          goTab('home');
+        } })
+      ]),
+      el('button', { class: 'btn ghost block', style: 'margin-top:8px', text: '放弃这一轮并清除存档', onclick: function () {
+        state.screen = null;
+        state.session = null;
+        try { store.clearSession(); } catch (e) { }
+        goTab('home');
+      } })
+    ]));
+    return screen;
   }
 
   function renderTab() {
@@ -1495,7 +1531,28 @@
     var s = state.session;
     var screen = el('div', { class: 'screen narrow' });
     if (!s) { screen.appendChild(el('p', { class: 'muted', text: '没有学习会话' })); return screen; }
+    // render() has already cleared the screen by the time this runs, so anything
+    // that throws here leaves a blank page with no way back. An empty card list
+    // or an out-of-range index is reachable in practice (words deleted while a
+    // saved round was resuming), so recover instead of crashing.
+    if (!s.cards || !s.cards.length) {
+      screen.appendChild(el('p', { class: 'muted', text: '这一轮没有可学的卡片' }));
+      screen.appendChild(el('div', { class: 'btn-row' }, [
+        el('button', { class: 'btn', text: '回首页', onclick: function () {
+          state.session = null;
+          store.clearSession();
+          goTab('home');
+        } })
+      ]));
+      return screen;
+    }
+    if (s.index >= s.cards.length) s.index = s.cards.length - 1;
+    if (s.index < 0) s.index = 0;
     var card = s.cards[s.index];
+    if (!card) {
+      screen.appendChild(el('p', { class: 'muted', text: '这一轮的卡片已失效' }));
+      return screen;
+    }
     var total = s.cards.length;
 
     screen.appendChild(el('header', { class: 'topbar' }, [
@@ -1946,13 +2003,17 @@
     ]));
     var list = el('div', { class: 'card pad', style: 'margin-top:12px' });
     s.questions.forEach(function (q, i) {
-      // No owning word, no phonetic: for a phrase the owner ("support") is a
-      // literal part of the answer ("provide support"), so printing it handed
-      // over half the answer — the same leak that was fixed on the typed screen.
+      // No owning word, no phonetic, and no English audio on this screen: for a
+      // phrase the owner ("support") is a literal part of the answer
+      // ("provide support"), and reading the answer aloud would do the same
+      // damage. What can be heard here is the Chinese prompt only.
       list.appendChild(el('div', { class: 'checkline' }, [
         el('div', { class: 'body' }, [
           el('div', { class: 'small', text: (i + 1) + '. ' + (q.prompt || '（无中文提示）') })
-        ])
+        ]),
+        q.prompt ? el('button', {
+          class: 'speak sm', onclick: function () { speak(q.prompt); }
+        }, [svgIcon('speak')]) : null
       ]));
     });
     screen.appendChild(list);
@@ -2111,8 +2172,22 @@
   function renderHandResult(screen, data) {
     var results = data.grading;
     var total = results.length;
-    var correct = results.filter(function (r) { return r.correct; }).length;
-    screen.appendChild(topbar('批改复核', correct + ' / ' + total + ' 正确，可逐题修正'));
+    var subEl = el('div', { class: 'sub' });
+    var bar = topbar('批改复核');
+    // topbar puts the title inside a .grow wrapper; appending the live count to
+    // that wrapper keeps it directly under the heading instead of beside it.
+    var titleWrap = bar.firstChild;
+    if (titleWrap && titleWrap.appendChild) titleWrap.appendChild(subEl);
+    else bar.appendChild(subEl);
+
+    // The header count has to follow every correction, otherwise it keeps
+    // showing the AI's original verdict while the list says otherwise.
+    function refreshSummary() {
+      var n = results.filter(function (r) { return r.correct; }).length;
+      subEl.textContent = n + ' / ' + total + ' 正确，可逐题修正';
+    }
+    refreshSummary();
+    screen.appendChild(bar);
     var list = el('div', { class: 'cardlist' });
     results.forEach(function (r, i) {
       var toggle = el('button', {
@@ -2122,7 +2197,7 @@
           r.correct = !r.correct;
           this.textContent = r.correct ? '对' : '错';
           this.className = 'btn sm ' + (r.correct ? 'ok' : 'danger');
-          saveBtn.disabled = false;
+          refreshSummary();
         }
       });
       list.appendChild(el('div', { class: 'rowcard' }, [
@@ -2136,6 +2211,10 @@
           el('div', { class: 'zh', text: '你写：' + (r.wrote || '（空）') }),
           r.note ? el('div', { class: 'tiny muted', text: r.note }) : null
         ]),
+        // Hearing the correct answer is useful on the review screen, and safe:
+        // the answer is already printed right next to it.
+        el('button', { class: 'speak sm', onclick: function () { speak(r.q.answer); } },
+          [svgIcon('speak')]),
         toggle
       ]));
     });

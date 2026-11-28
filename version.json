@@ -1,10 +1,10 @@
 {
-  "versionCode": 16,
-  "versionName": "0.9.15-pre",
+  "versionCode": 17,
+  "versionName": "0.9.16-pre",
   "stage": "pre-release",
-  "notes": "修复听写模式切换丢失进度：拍照/只看音频之间切换不再重新出题，已答内容保留。",
+  "notes": "修复白屏崩溃（学习页缺边界检查，渲染异常会清空页面）；手写页与批改结果页新增读音按钮。",
   "deviceTested": {
     "date": "2026-11-28",
-    "result": "切换流程经脚本端到端验证；真机未复测"
+    "result": "崩溃场景已用脚本复现并验证修复；读音按钮真机未复测"
   }
 }

@@ -1,8 +1,8 @@
 MociCi build manifest
-built: 2026-11-28T19:33:53+08:00
-versionCode: 16
-versionName: 0.9.15-pre
+built: 2026-11-29T00:21:08+08:00
+versionCode: 17
+versionName: 0.9.16-pre
 stage: pre-release
-artifact: dist/MociCi-0.9.15-pre.apk
-sha256: 062c7cbafd6a2e56a14242145072703ef0a258d297e4d9acf9713b6749a55a21
+artifact: dist/MociCi-0.9.16-pre.apk
+sha256: 6df87ad9881a90702a6bb19492e884477ea874ebfc02ebcc70515c1b917ff7c6
 qaBuild: 0
